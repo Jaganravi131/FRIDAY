@@ -128,6 +128,60 @@ ollama create friday:v3 -f Modelfile && ollama run friday:v3
 
 ## 3. The model menu (concrete, for 16 GB)
 
+> ## ⚡ AMENDED by [12-LINEAR-ATTENTION-PIVOT.md](./12-LINEAR-ATTENTION-PIVOT.md)
+>
+> **The menu below is the *Transformer* menu. It is kept intact because you need a Transformer
+> baseline to prove the hybrid helps — but the recommended default has moved.**
+>
+> **New preferred resident set — hybrid linear-attention, all with official llama.cpp GGUFs:**
+>
+> | Role | Model | Quant | RAM | Speed | Why |
+> |---|---|---|---|---|---|
+> | **L0 gate/router** | `LFM2-350M` **or** `qwen3:0.6b` | QAD-Q4_0 / Q8 | 0.2–0.7 GB | **30–86 t/s** | Benchmark both; LFM2.5-350M's **QAD** (quantisation-aware) loses less at 4-bit |
+> | **L1 main — default** | ⭐ **`LFM2-2.6B`** | i1-Q4_K_M | ~1.8 GB | **30 t/s** | Best quality/speed measured on your hardware class |
+> | **L1 main — smallest** | ⭐ **`LFM2.5-1.2B-Instruct`** | Q4_K_M | ~0.9 GB | est. 30–45 t/s | Tiny footprint → **huge `num_ctx` headroom**. The O(1)-state payoff |
+> | **L1 main — biggest** | ⭐ **`LFM2-8B-A1B`** | UD-Q4_K_XL | ~5 GB | **38 t/s** | 8B stored / **1B active**. If it fits beside Windows, this wins |
+> | **L1 alt** | `RWKV-7 World 2.9B` | Q8_0 | ~3 GB | ? | In llama.cpp via @MollySophia's work. **Benchmark it** |
+> | **Baseline (keep!)** | `qwen3:4b` | UD-Q4_K_XL | 2.6 GB | 20 t/s | **The control group.** Without it you cannot attribute any win to the architecture |
+> | **Vision — same family** | `LFM2-VL-1.6B` / `LFM2.5-VL-450M` | Q8/Q4 + `mmproj` | 0.5–1.6 GB | — | One tokenizer, one serving path |
+> | **Vision — stronger** | `qwen3-vl:4b` | Q4 | 3.5 GB | 10–15 t/s | DocVQA **95.3**. Benchmark against LFM2-VL on **your** documents |
+>
+> ```bash
+> winget install llama.cpp     # Windows native, ₹0
+> llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF:Q4_K_M -c 8192 --port 8080 -ngl 99 --flash-attn 1
+> llama-server -hf LiquidAI/LFM2-2.6B-GGUF:Q4_K_M -c 8192 --port 8080
+> llama-server -m LFM2-VL-1.6B-Q8_0.gguf --mmproj mmproj-LFM2-VL-1.6B-Q8_0.gguf -c 4096 --port 8081
+> ```
+>
+> ### The payoff is context length, not speed
+>
+> | | Transformer (`qwen3:4b`) | Hybrid linear (LFM2 class) |
+> |---|---|---|
+> | KV cache @ 8K ctx | ~1.5–2.5 GB | **fixed, small** |
+> | KV cache @ 32K ctx | ~6–10 GB → **won't fit** | **same as @ 8K** |
+> | Max practical `num_ctx` on 16 GB | 8–12K | **32K–128K** |
+> | Long-session degradation | compaction ladder required | **minimal** |
+>
+> **The Attention Ledger stops being a rationing system and becomes a routing system.** With 32K+
+> usable on 16 GB you can keep the whole day's conversation resident instead of evicting it —
+> a qualitative change in how context-aware FRIDAY feels.
+>
+> ### ⚠️ The test that decides it — run this first
+>
+> Speed and RAM are easy. **Needle recall is the question.** Write `scripts/eval_recall.py`
+> (~40 lines): generate 20 conversations of exactly 8,000 tokens with a specific fact
+> (*"the API key was 7f3a9c2b"*) planted at depths 500 / 2000 / 4000 / 6000 / 7500, then ask for it.
+> Score exact-match.
+>
+> - Hybrid ≥ **0.9** and ≥25 t/s → **use the hybrid.**
+> - Hybrid collapses (< **0.6**) → the recall gap is real at your scale. **Stay on Qwen3-4B** and
+>   let the Ledger + external store do the work; Track B becomes the research, not the product.
+>
+> **Either result is a good result.** And per Law 2c: **re-run this after every fine-tune** —
+> recall is a property of a *checkpoint*, not an architecture, and CoT post-training degrades it.
+>
+> → Full detail: [12 §5](./12-LINEAR-ATTENTION-PIVOT.md)
+
 All numbers are CPU-only Q4/Q8 measured on comparable Ryzen-class hardware unless noted.
 
 ### Resident set (loaded at boot, ~7 GB total)
@@ -161,12 +215,24 @@ Mitigations below.
 > against Qwen3-4B on *your* tasks — if quality is within a few points, take the 2× speed.
 
 ### Cloud (only via the ladder, never by default)
-| Tier | Model | Why |
-|---|---|---|
-| **L2** | Claude / GPT / Gemini mid-tier via **OpenRouter** | One key, 300+ models, per-request routing, hard spend caps |
-| **L2-voice** | `gpt-realtime-2.1` **or** Gemini Live (`gemini-3.1-flash-live-preview`) | Full-duplex speech-to-speech, **300–550 ms end-to-end**. Gemini Live has **affective dialog** (adapts tone to your expression) and **native bidirectional transcription** — no sidecar ASR |
-| **L3** | Frontier reasoning model | Deep research, multi-step planning |
-| **L4-teacher** | Frontier model, **search-time only** | GEPA reflection + SEAL-style training-data synthesis. OpenJarvis: amortises to **<$0.001/query within 6 months** at 100 queries/day |
+
+> ## ⚠️ **DISABLED — the budget is ₹0.** → [12 §8](./12-LINEAR-ATTENTION-PIVOT.md)
+>
+> **The top of the Escalation Ladder is empty.** L2/L3/L4 are unavailable, so the ladder's escape
+> valve — *"escalate when local confidence is low"* — has nowhere to escalate *to*. Three
+> consequences, and the mitigations:
+>
+> | Lost | Impact | ₹0 mitigation |
+> |---|---|---|
+> | **L2/L3 hard reasoning** | Deep research and multi-step planning cap at your local model | **Make the local tier better instead.** The hybrid backbone's 32K–128K usable context recovers a lot, and the RSC (Phase 3.5) recovers more |
+> | **L2-voice full-duplex** | No `gpt-realtime` / Gemini Live. You're on VAD + faster-whisper + Piper | Accept higher latency and a robotic voice; optimise barge-in instead — *that* is what makes voice feel alive, more than timbre does |
+> | **L4-teacher for GEPA** | ⚠️ **The one that matters.** OpenJarvis's 13–32 pp recovery came from a *frontier* teacher reflecting on failures | **Behavioural reflection** (S0 trace signals: barge-ins, rephrases, "no I meant…", tool failures) — a *better* feedback function than a model's opinion, and free. Plus **DSPy MIPROv2** instead of GEPA. Optional: one ₹200 burst for the *weekly* run only |
+>
+> **When the ladder's top rung is missing, `escalate` must degrade to *"ask the user"* — not
+> *"guess confidently."*** Wire that explicitly: low confidence + no cloud = surface the uncertainty
+> rather than fabricate. This is a *trust* feature, not just a fallback.
+>
+> The table below is retained as the design for the day the budget changes.
 
 **Speculative decoding — the free latency win:**
 ```bash

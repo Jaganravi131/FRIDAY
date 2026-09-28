@@ -151,6 +151,36 @@ Items marked ⭐ are the ones that most changed FRIDAY's design.
 
 ---
 
+## Linear attention / retention / hybrids ← *the pivot, [12](./12-LINEAR-ATTENTION-PIVOT.md)*
+
+| Source | The specific data taken |
+|---|---|
+| **RetNet: Retentive Network** — [arXiv 2307.08621](https://arxiv.org/pdf/2307.08621) | Configs 1.3B/2.7B/6.7B (24/32/32 layers, hidden 2048/2560/4096, heads 8/10/16). **Trained on only 100B tokens** on **512 AMD MI200 GPUs**, TorchScale, MIT code. Beats Transformer perplexity only **above ~2B** (loses at 1.3B). Retention state adds **~3%** inference memory (weights = 97%); **length-invariant decode**; **8.4× faster decode** than a 7B Transformer with KV cache at 8K, ~70% less memory. Decay is **fixed, input-independent** (`α_t = γ`) |
+| **A Systematic Analysis of Hybrid Linear Attention** — [arXiv 2507.06457](https://arxiv.org/html/2507.06457v2) | ⚠️ **The decisive source.** *"RetNet's fixed exponential decay **fails to protect long-range cues, yielding near-zero recall even when full-attention layers are added**."* Gated architectures (**GatedDeltaNet, HGRN-2**) **surpass the Transformer baseline by 2–5 pp** at the optimal ratio. Three required ingredients: **selective gating, hierarchical recurrence, controlled forgetting**. RetNet 6-1 benchmark avg **0.547** |
+| **aiwiki.ai/wiki/retnet** (May 2026) | *"As of 2026 there is **no publicly available frontier-scale LLM that uses pure retention as its sole sequence operator**; the dominant pattern is to **interleave attention with linear-state operators**"* |
+| [`fla-hub/retnet`](https://huggingface.co/collections/fla-hub/retnet) | `retnet-2.7B-100B` exists — **58 downloads, 1 like**. `retnet-1.3B-100B` — 685 downloads. Research reproductions, not products |
+| **Frenos whitepaper** (frenos.io) | Pre-trained their own ~3B RetNet on **only 4B tokens** due to compute constraints; *"performs on par with industry-standard models of its size"* — **domain-specifically only** |
+| **RNNs Are Not Transformers (Yet)** — ICLR 2025 | **Proves** RNNs with *o(n)*-bit memory cannot solve in-context retrieval (associative recall, IsTree) **even with CoT**. Two sufficient fixes: **(a)** a function-call primitive for in-context retrieval → *all polynomial-time solvable problems*; **(b)** **one Transformer layer at the end**. *"In-Context RAG allows all the models to reach near-perfect accuracy"* |
+| **Gated DeltaNet** — ICLR 2025 | **Perfect in-context associative recall** vs Mamba2's gaps; hybrids with SWA. Gated DeltaNet-H1/H2 beat both Mamba2 and DeltaNet on in-context retrieval |
+| **Achilles' Heel of Mamba** — NeurIPS 2025 Spotlight | SSMs *"systematically fail on copy and recall tasks… **not an implementation detail that can be corrected with more data or better tuning**"* |
+| **Samba** — ICLR 2025 | Mamba + **Sliding Window Attention** (w=2048) + SwiGLU, layer-wise interleaved; linear complexity, *potentially infinite* length extrapolation. Table 10: short conv on Q/K/V **helps SWA a lot, helps GLA less** (GLA already has channel-level fine-grained decay). **Sliding RetNet/GLA variants fell short of the Mamba hybrid** |
+| **BASED** | Linear + sliding-window attention traverses the recall-memory Pareto frontier; **+6.22 accuracy points** on recall-intensive tasks vs pure sub-quadratic |
+| **RWKV-X** — [arXiv 2504.21463](https://arxiv.org/abs/2504.21463) | RWKV-7 + sparse attention → **near-perfect passkey recall at 64K** (3.6B) |
+| **acingai.com/articles/state-space-models-2026** | Production converged on hybrids at **~3:1**: **Kimi K3** (3 KDA : 1 gated MLA; 69/24 over 93 layers, 2.8T total / 104B active, 1M ctx), **Qwen3.5-397B-A17B** (3 Gated DeltaNet : 1 attn), **Nemotron 3 Ultra** (mostly Mamba-2), **Granite 4.0** (~9 Mamba-2 : 1 attn, **>70% memory reduction**), **Jamba 1.5**, **Falcon-H1** (parallel heads, 0.5B–34B), **Zamba2-VL** (1.2B–7B, Apache 2.0). ⭐ *"A hybrid paired with retrieval **sidesteps** the recall gap: don't ask the recurrent state to memorize what you can fetch from an index."* ⚠️ *"**Recall is a property of a checkpoint, not an architecture** — CoT post-training can degrade it; measure after post-training"* (repair: **QK-Restore**) |
+| **IBM Granite 4** | Pure SSMs match/exceed Transformers on many tasks but *"remain significantly behind on tasks requiring strong copy or in-context learning"* — notably **five-shot MMLU** |
+| **Mamba vs DeltaNet vs Transformer recall table** | Transformer **74.5** avg vs Mamba **69.3**; Mamba's weakest axis is **Fuzzy Recall (6.7)**; **DeltaNet is perfect on associative recall** |
+| **Atomic Chat — best local LLMs for 32 GB (Aug 2026)** | **Nemotron 3.5 Lightning 30B-A3B**: hybrid Mamba-2 + attention + MoE, **52 layers (23 Mamba-2, 23 MoE, 6 attention)**, 128 routed / 6 active + 1 shared, **262K ctx in local GGUF**, **KV cache ~6 KB/token** (only 2 KV heads across 6 attention layers), Q5_K_M 26.6 GB or AD-IQ4_NL 19.7 GB shared-memory, OpenMDW 1.1. Also **Qwen 3.6 35B-A3B** (hybrid Gated DeltaNet / gated attention MoE) |
+| **[Liquid AI — llama.cpp on-device docs](https://docs.liquid.ai/deployment/on-device/llama-cpp)** (Feb 2026) | ⭐ **Official** llama.cpp path for LFM2/LFM2.5, incl. **Windows CPU** (`llama-*-bin-win-avx2-x64.zip`) and Vulkan builds. `llama-server -hf LiquidAI/LFM2.5-1.2B-Instruct-GGUF -c 4096 --port 8080`. **LFM2-VL** via `llama-mtmd-cli` with a `mmproj` file |
+| **LiquidAI GGUF collection** | `LFM2-350M`, `LFM2-700M`, `LFM2-2.6B`, `LFM2-2.6B-Exp`, `LFM2.5-350M` (incl. **QAD-Q4_0**, quantisation-aware), `LFM2.5-1.2B-Instruct`, `LFM2-VL-450M`, `LFM2-VL-1.6B`, `LFM2.5-VL-450M`. *"LFM2 is a new generation of **hybrid** models, designed for **on-device** deployment"* |
+| **[RWKV llama.cpp inference](https://wiki.rwkv.com/inference/llamacpp.html)** | **RWKV-6/7 supported in llama.cpp** via @MollySophia. `./llama-cli -m rwkv-7-world-2.9b-Q8_0.gguf -cnv -t 8 -ngl 99` |
+| **Self-Training a Small LLM From Scratch (2026 guide)** | ⭐ **The budget math.** Chinchilla-optimal **1B / 50B tokens ≈ 600 H100-hours ≈ $1.5K spot**; 3B/60B ≈ 5,500 h ≈ $14K; 7B/140B ≈ 30,000 h. *"A tiny learning-project 700M at GPT-2 quality is genuinely $50."* **2026 rule: train ≥100:1, ideally 500–1,000:1** tokens-per-param (Llama 3 ~200:1; **LFM2.5-350M 80,000:1**). TinyLlama 1.1B / 3T tokens ≈ 90 days on 16× A100. 8× H100 ≈ 485K tok/s |
+| **Spheron — cost to train a 70B (Aug 2026)** | `C = 6ND`. Full fine-tune of 70B on 1B SFT tokens: 8×H100, ~30 h, **~$696 on-demand / $192 spot**. Continued pretraining / domain adaptation: 50–100B tokens, mid-six to low-seven figures |
+| **r/LocalLLaMA — cheapest way to train a small model (Mar 2026)** | Practitioner numbers: ~50B tokens for a 3B model took **5 days on 8× MI300x**; **200M-param validation run → 50 h H100 / $75 / 10B tokens**; 1B in mixed precision + gradient checkpointing *"should fit in 12GB"*; 8× 3090 Ti ≈ 41K tok/s |
+| **DEV — How to Train a Small Language Model (2026)** | Cost comparison: **from scratch $500–$5,000** + weeks–months; **fine-tune $10–$100** (500–10,000 samples) + hours–days; **distil $200–$2,000**. At ₹0 only the latter two exist |
+| **`flash-linear-attention` (`fla`)** | ⭐ Hardware-efficient Triton kernels already written and benchmarked for RetNet, GLA, Based, HGRN2, RWKV6, GSA, Mamba2, DeltaNet, **Gated DeltaNet**, RWKV7. **Use this; don't hand-roll kernels on a T4.** `torchscale` (MIT) is the reference RetNet implementation |
+
+---
+
 ## Two claims to treat carefully
 
 1. **"40% better"** from self-created skills — the actual claim is **40% less token consumption
@@ -163,6 +193,22 @@ Items marked ⭐ are the ones that most changed FRIDAY's design.
    **Use them for directional architecture choices (temporal > flat), not for precise ranking.**
    Build your own eval suite — that's the entire point of
    [06-INNOVATION-self-improvement-loop.md](./06-INNOVATION-self-improvement-loop.md).
+3. ⭐ **"RetNet gives you O(1) memory, so it's the efficient choice."** The *inference-cost* half is
+   true and well-measured (8.4× faster decode, ~3% extra memory, length-invariant). The *implicit*
+   second half — "and it's good enough" — is **false, and it fails on precisely the capability
+   FRIDAY sells.** RetNet's fixed input-independent decay yields *"near-zero recall even when
+   full-attention layers are added"* ([2507.06457](https://arxiv.org/html/2507.06457v2)), it's
+   generation 2 of 5 in a lineage that moved to selective gating, and the only checkpoints are
+   undertrained 100B-token research reproductions with **58 downloads**. **The efficiency argument
+   is right; the architecture choice is wrong.** Take the efficiency from a *gated* hybrid
+   (Gated DeltaNet / Mamba-2 / KDA class) instead — it surpasses the Transformer baseline by 2–5 pp
+   rather than falling off a cliff. → [12 §2](./12-LINEAR-ATTENTION-PIVOT.md)
+4. ⭐ **"A fixed-size recurrent state replaces the need for an external memory index."** It does the
+   opposite — **it makes the index load-bearing.** A fixed-size state is *"by construction a lossy
+   memory"* and *"what it loses first is associative recall: retrieving a specific earlier token
+   verbatim."* The literature's own resolution: *"a hybrid paired with retrieval **sidesteps** the
+   recall gap rather than solving it."* FRIDAY's Memory Compiler is not made redundant by the
+   pivot; it is what makes the pivot survivable. → [12 §3](./12-LINEAR-ATTENTION-PIVOT.md)
 
 ---
 
@@ -181,3 +227,11 @@ Items marked ⭐ are the ones that most changed FRIDAY's design.
 | Voyager: An Open-Ended Embodied Agent with LLMs | NVIDIA/Caltech 2023 |
 | Darwin Gödel Machine: Open-Ended Evolution of Self-Improving Agents | Sakana AI 2025 |
 | Cross-linguistic turn-taking (the 200–250 ms baseline) | Stivers et al., PNAS 2009, doi:10.1073/pnas.0903616106 |
+| ⭐ **Retentive Network: A Successor to Transformer for Large Language Models** | [arXiv 2307.08621](https://arxiv.org/pdf/2307.08621) — the proposal's starting point. Read §3 (parallel/recursive/chunkwise retention) and Table 2 (configs) |
+| ⭐ **A Systematic Analysis of Hybrid Linear Attention** | [arXiv 2507.06457](https://arxiv.org/html/2507.06457v2) — **read this one first.** It is the empirical case *against* RetNet and *for* gated hybrids |
+| ⭐ **RNNs Are Not Transformers (Yet): On Capturing the Gap via In-Context Reasoning** | ICLR 2025 — the theoretical impossibility result *and* the two sufficient fixes FRIDAY already implements |
+| **Gated Delta Networks: Improving Mamba2 with Delta Rule** | ICLR 2025 — perfect in-context associative recall; the architecture class the RSC should use |
+| **Samba: Simple Hybrid State Space Models for Efficient Unlimited Context Language Modeling** | ICLR 2025 — Mamba + SWA interleaving; the ablation showing Sliding-RetNet falls short |
+| **Achilles' Heel of Mamba: Why SSMs Fail on Copy-and-Recall** | NeurIPS 2025 Spotlight — *"not correctable with more data or better tuning"* |
+| **RWKV-X: Advancing RWKV-7 with Native Sparse Attention** | [arXiv 2504.21463](https://arxiv.org/abs/2504.21463) — near-perfect passkey recall at 64K |
+| **BASED: Simple Linear Attention Language Models Balance the Recall-Throughput Tradeoff** | the recall-memory Pareto frontier; +6.22 pts on recall-intensive tasks |
