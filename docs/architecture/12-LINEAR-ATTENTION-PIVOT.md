@@ -395,6 +395,32 @@ context-aware FRIDAY feels.
 
 **This is the innovation. This is what you should actually build.**
 
+> ## ⚡ SUPERSEDED IN PART — [13-GATED-DELTANET2-ERASE-WRITE.md](./13-GATED-DELTANET2-ERASE-WRITE.md)
+>
+> The RSC sketch below specifies a **Gated DeltaNet**-class recurrence with a scalar-tied delta
+> gate. **NVIDIA's Gated DeltaNet-2** ([arXiv 2605.22791](https://arxiv.org/abs/2605.22791),
+> May 2026) decouples that gate into **channel-wise erase `b_t`** (key axis) and **channel-wise
+> write `w_t`** (value axis), and its own ablation reports **the erase gate accounts for most of
+> the gain** — moving RULER needle retrieval **63 → 90**.
+>
+> **That matters more here than anywhere else in this document,** because §6.3's `L_recall` term
+> exists to stop the RSC learning to drop verbatim detail. GDN-2 attacks the same failure from the
+> architecture side: under a scalar tie, **you cannot erase hard without writing hard**, so every
+> attempt to wipe transient chatter scrambles what you meant to keep. Decoupling is the fix for the
+> 92% → 33% collapse in [04](./04-INNOVATION-attention-ledger.md) and for RetNet's fixed-γ failure
+> in §2.1 — **both were coupling failures that presented as recall failures.**
+>
+> **Read [13](./13-GATED-DELTANET2-ERASE-WRITE.md) for:** the verified math and lineage
+> (DeltaNet → GDN → KDA → GDN-2 → **EDA**, which decouples erase/write *addresses* and fits
+> FRIDAY's bi-temporal correction case better), the RSC v2 spec, a 5-rung ablation ladder where
+> **KDA is the free control** (GDN-2 recovers it exactly when both gates tie), two new free
+> supervision terms (`L_erase` from retraction pairs, `L_decay` from the decay function), and the
+> T4/Triton engineering reality.
+>
+> **What does *not* change:** the two-memory split (§3), Law 2b, the frozen-backbone design, the
+> Kaggle-T4 tractability argument (§6.2), and the placement in Phase 3.5. GDN-2 makes the RSC
+> better; it does not make it a backbone. **There is no GGUF/llama.cpp path for a custom layer.**
+
 ### 6.1 What it is
 
 A **trained module** — small, ~10–100M parameters — that compiles FRIDAY's interaction history
@@ -429,6 +455,13 @@ prefix-state.
 **Note the gate: `G_t` is *learned and token-wise*, and the update uses the *delta rule*.**
 That is Gated DeltaNet, not RetNet — the difference between "surpasses Transformer baseline by
 2–5 pp" and "near-zero recall even with attention added."
+
+> ⚡ **Upgraded in [13](./13-GATED-DELTANET2-ERASE-WRITE.md):** the operator becomes
+> **Gated Delta Rule-2**, splitting that single gate into a channel-wise **erase** gate `b_t` on the
+> key axis and a channel-wise **write** gate `w_t` on the value axis, then (rung 5) an
+> **independently addressed erase** `e_t` from EDA. Verified form:
+> `S_t = (I − k_t(b_t ⊙ k_t)ᵀ) D_t S_{t−1} + k_t(w_t ⊙ v_t)ᵀ`, `D_t = Diag(α_t)`.
+> Block: `GDN-2 → MLP → SWA(w=2048) → MLP`. 16 heads, d_k = d_v = 128, **~1 MB state/layer**.
 
 **Note the salience side-channel.** This is the piece that makes it FRIDAY's Memory Compiler and
 not just a context compressor: while the RSC compresses, it *also* flags spans worth writing to
@@ -683,10 +716,10 @@ Changes to [00-BLUEPRINT §6](./00-BLUEPRINT.md), marked **Δ**:
 | Phase | Weeks | Δ from before |
 |---|---|---|
 | **0 — Foundation** | 1 | **Δ Day 0 now includes the Track-A bake-off**: benchmark LFM2.5-1.2B / LFM2-2.6B / LFM2-8B-A1B / RWKV-7-2.9B / **Qwen3-4B (Transformer baseline)** on speed, RAM-at-32K, and **the needle-recall test**. Write `BENCHMARKS.md`. Pick the backbone with data, not vibes |
-| **1 — Memory Compiler** | 2–4 | **Δ Add the salience-label tap**: every extracted S2 fact records its source span. These are Track B's free training labels. **Start collecting them in Week 2, not Week 12** |
+| **1 — Memory Compiler** | 2–4 | **Δ Add the salience-label tap**: every extracted S2 fact records its source span. These are Track B's free training labels. **Start collecting them in Week 2, not Week 12.** **ΔΔ And record retraction pairs** `(key_old, key_new)` from every correction — free supervision for EDA's independently-addressed erase ([13 §5.1](./13-GATED-DELTANET2-ERASE-WRITE.md)). **You cannot backfill either** |
 | **2 — Attention Ledger** | 4–6 | **Δ Split by backbone.** If Track A is a hybrid: the transcript slot becomes large/absent and the ladder shortens to Rung 0 + Rung 4. If it's Qwen3-4B: build the full ladder as specified |
 | **3 — Perception & Presence** | 6–9 | **Δ Use `LFM2-VL` if it beats `qwen3-vl:4b` on *your* documents** — same family, one serving path. **Δ Voice is local-only: set expectations now, Piper is not "natural"** |
-| **3.5 — NEW: Track B RSC** | 8–12 | **Δ The innovation.** Build the Retention State Compiler: gated-delta recurrence + salience head, distilled against the frozen backbone with an explicit `L_recall` term. Kaggle T4. Ship it behind a flag; A/B it against the compaction ladder on the locked eval suite |
+| **3.5 — NEW: Track B RSC** | 8–12 | **Δ The innovation.** Build the Retention State Compiler: ⚡ operator = **Gated DeltaNet-2** (channel-wise decoupled erase/write), stretch goal **EDA** (decoupled erase/write *addresses*) + salience head, distilled against the frozen backbone with explicit `L_recall`, **`L_erase`** and **`L_decay`** terms. Run the **ablation ladder KDA → +erase → +write → +EDA** ([13 §5.2](./13-GATED-DELTANET2-ERASE-WRITE.md)). Kaggle T4. Ship behind a flag; A/B against the compaction ladder on the locked eval suite |
 | **4 — Proactivity** | 9–11 | unchanged |
 | **5 — Self-Improvement** | 11–16 | **Δ GEPA uses behavioural reflection (8.2), not a cloud teacher.** **Δ Continued-pretraining/QLoRA of the *existing* backbone on your corpus — not from scratch.** **Δ Re-run the needle-recall test after every training run** (recall is a checkpoint property) |
 | **5.5 — NEW: Track C tiny specialists** | 14–20 | **Δ Train the six narrow models from §7.4** — router, redactor, salience head, fact extractor. Each is a tractable Kaggle job and each measurably improves the system |

@@ -29,6 +29,24 @@
 > - **Law 2 is amended** (architecture-contingent) and **Laws 2b/2c are added.**
 > - **Phases 3.5 and 5.5 are inserted** into the roadmap; Phase 0 now begins with a bake-off.
 >
+> **Then [13-GATED-DELTANET2-ERASE-WRITE.md](./13-GATED-DELTANET2-ERASE-WRITE.md) specifies the
+> RSC's operator:** NVIDIA's **Gated DeltaNet-2** (May 2026) decouples the delta rule's single
+> scalar gate into **channel-wise erase `b_t`** and **channel-wise write `w_t`**, and its own
+> ablation reports **the erase gate accounts for most of the gain** — RULER needle retrieval
+> **63 → 90**. Under a scalar tie you *cannot erase hard without writing hard*, which is why both
+> the 92%→33% summarisation collapse and RetNet's fixed-γ failure presented as recall failures:
+> **both were coupling failures.** Its successor **EDA** (Jun 2026) decouples erase/write
+> *addresses* rather than strengths — *"GDN-2 decouples **how strongly**; EDA decouples **where**"* —
+> which is exactly FRIDAY's bi-temporal correction case, and the two compose. This yields
+> **Innovation #9b**: the compiler's decay function, retraction pairs and salience labels are
+> **free supervision for the three gate branches.**
+>
+> ⚠️ **GDN-2 does not change Phase 0 and cannot be the backbone.** The NVlabs repo is a *training*
+> harness (`pretrain.py`, `lit_gpt/`, Dockerfile) with **no inference server, no GGUF, no llama.cpp
+> support and no checkpoint** — there is no path to serving a custom layer on a 16 GB CPU laptop,
+> and you cannot insert GDN-2 layers into a frozen LFM2. It belongs in **Phase 3.5**, inside the
+> RSC, running offline on a Kaggle T4 against a frozen backbone — where every blocker disappears.
+>
 > Everything else in this blueprint stands unchanged.
 
 ---
@@ -51,7 +69,7 @@ That single idea is what makes FRIDAY (a) context-aware, (b) self-improving, and
 
 ---
 
-## 1. What actually differentiates FRIDAY (the 8 innovations)
+## 1. What actually differentiates FRIDAY (the 10 innovations)
 
 | # | Innovation | One-liner | Doc |
 |---|---|---|---|
@@ -64,6 +82,7 @@ That single idea is what makes FRIDAY (a) context-aware, (b) self-improving, and
 | 7 | **Presence Fabric** | One *room*, many *surfaces*. Start on phone, finish on laptop, mid-sentence. | [07](./07-realtime-voice-presence.md) |
 | 8 | **The Sense Registry** | Tiered consent, enforced **deterministically in the data layer** — not by prompting the model to behave. | [09](./09-security-privacy-trust.md) |
 | **9** | ⭐ **The Two-Memory Split + Retention State Compiler** | A **lossy O(1) recurrent state** carries conversational *context*; a **lossless external store** carries *facts*. A trained ~40M-param gated-delta module compiles one into the other — and its **salience head feeds S2 fact extraction in the same forward pass.** Compression and memory, unified. | [12](./12-LINEAR-ATTENTION-PIVOT.md) |
+| **9b** | ⭐ **Gate supervision from a bi-temporal knowledge base** | **GDN-2/EDA** expose three gate branches — **decay α_t, erase b_t/e_t, write w_t**. The Memory Compiler already computes three matching signals: the **decay function** ([02 §4](./02-INNOVATION-memory-compiler.md)), **retraction events** — which yield `(key_old, key_new)` pairs, free supervision for EDA's *independently-addressed* erase — and the **salience head**. A recurrent memory operator whose forgetting is supervised by what the compiler decided to keep. | [13](./13-GATED-DELTANET2-ERASE-WRITE.md) |
 
 Plus the **circadian rhythm** that ties them together: [08](./08-proactive-heartbeat.md).
 
@@ -404,11 +423,15 @@ Full numbers and the model menu in → **[05-model-tiers-hardware.md](./05-model
   (`trace_id`, `char_start`, `char_end`). These are **free supervision labels for Track B's
   salience head** — and if you start collecting them in Week 12 instead of Week 2 you will have no
   training data when you need it. Cost: one extra column, one extra insert.
+- ⚡ **And record retraction pairs.** Every correction yields `(key_old, key_new, span_old, span_new)`
+  from the bi-temporal `valid_to` / `superseded_by` write you're already doing. These are **free
+  supervision for `L_erase`** — the term that makes EDA's independently-addressed erase trainable
+  ([13 §5.1](./13-GATED-DELTANET2-ERASE-WRITE.md)). **Neither of these can be backfilled.**
 - Markdown-as-source-of-truth + `watchdog` file-watcher → incremental re-index
 - Nightly **Dreaming** job: consolidate, dedupe, decay, merge
 - Retrieval: embed → wide → rerank → narrow → score floor
 - **Exit test:** tell it a fact, contradict it two weeks later, ask "what did I used to think?" —
-  it answers *both* correctly with dates. **Plus:** ≥100 salience-labelled spans in the DB.
+  it answers *both* correctly with dates. **Plus:** ≥100 salience-labelled spans **and ≥20 retraction pairs** in the DB.
 
 ### **Phase 2 — The Attention Ledger (Weeks 4–6)** ← *"clear" + "context-aware"*
 *Deliverable: responses that are actually about you, at low cost and low latency.*
@@ -440,22 +463,47 @@ Full numbers and the model menu in → **[05-model-tiers-hardware.md](./05-model
 
 ### **⭐ Phase 3.5 — The Retention State Compiler (Weeks 8–12)** ← *the research contribution*
 *Deliverable: history stops being rationed. The Attention Ledger becomes a physical state matrix.*
-- Build the RSC: **gated linear recurrence with a delta rule** (Gated DeltaNet class — *not*
-  RetNet's fixed γ), ~10–100M params, backbone **frozen in 4-bit**
-- Use **`flash-linear-attention` (`fla`)** kernels. It already has RetNet, GLA, HGRN2, RWKV6, Mamba2,
-  DeltaNet, **Gated DeltaNet**, RWKV7 written and benchmarked. Hand-rolling Triton on a T4 is a
-  month of your life. (`torchscale` is the MIT alternative if you want the reference RetNet impl.)
-- Three losses: **`L_reconstruction`** (KL vs the full-history teacher), **`L_recall`** (explicit
-  needle exact-match — *without this term the RSC will learn to drop verbatim detail*),
-  **`L_salience`** (BCE against Phase 1's free labels)
+- ⚡ **Operator: Gated DeltaNet-2, not generic Gated DeltaNet** ([13](./13-GATED-DELTANET2-ERASE-WRITE.md)).
+  Channel-wise **erase** gate `b_t` on the key axis + channel-wise **write** gate `w_t` on the value
+  axis + KDA's channel-wise decay: `S_t = (I − k_t(b_t ⊙ k_t)ᵀ) D_t S_{t−1} + k_t(w_t ⊙ v_t)ᵀ`.
+  Block: `GDN-2 → MLP → SWA(w=2048) → MLP`. 16 heads, d_k=d_v=128, **~1 MB state/layer**.
+  **NVlabs' ablation says the erase gate accounts for most of the gain** — and erasing accumulated
+  transient noise is FRIDAY's dominant memory problem, while durable content doesn't need the state
+  at all (it goes to the store). ~40M trainable params, backbone **frozen in 4-bit**
+- ⚡ **Use the published code, don't write kernels.** [`NVlabs/GatedDeltaNet-2`](https://github.com/NVlabs/GatedDeltaNet-2)
+  ships PyTorch + Triton kernels + the chunkwise WY form + a gate-aware backward. **Extract only the
+  mixer** — their harness is `lit_gpt`-based pretraining and you want your own trainer. Fallback:
+  [`flash-linear-attention`](https://github.com/fla-org/flash-linear-attention) has battle-tested
+  **GDN + KDA** kernels; start at rung 3 by adding a channel-wise erase gate to `fla`'s GDN.
+  ⚠️ **T4 is sm_75; the NVlabs kernels are tuned for Hopper** — expect poor occupancy, and plan a
+  pure-PyTorch recurrent path for correctness checks (the RSC is offline, so throughput is moot).
+- ⚡ **Run the ablation ladder, in order** ([13 §5.2](./13-GATED-DELTANET2-ERASE-WRITE.md)):
+  **KDA (rung 2) → +channel-wise erase (3) → +channel-wise write (4) → +independent erase address
+  EDA (5).** GDN-2 **recovers KDA exactly** when both gates tie to a scalar, so rung 2 is a *free
+  control condition* and every rung is a one-variable change. If rung 3 is where your recall jumps —
+  as the published ablation predicts — **stop there and ship.** Do not start at rung 5.
+- ⚡ **Five-term loss**, of which **two are new and free**: `L_reconstruction` (KL vs the
+  full-history teacher), **`L_recall`** (needle exact-match — *without this the RSC learns to drop
+  verbatim detail*), `L_salience` (BCE vs Phase 1's labels → supervises `w_t`), ⭐ **`L_erase`**
+  (bi-temporal correction: the state must not return a superseded value — supervises EDA's `e_t`),
+  ⭐ **`L_decay`** (align α_t with the hand-specified decay function, then anneal the weight to 0 so
+  it learns freely — a working prior instead of a cold start)
+- ⭐ **The synthesis that makes this FRIDAY's and not NVIDIA's:** the compiler's **decay function**,
+  **retraction pairs** and **salience labels** supervise the operator's **three gate branches.**
+  Retractions yield `(key_old, key_new)` — and `key_old ≠ key_new` is *precisely* why EDA's
+  independently-addressed erase is needed, since a write-anchored erase (GDN-2) cannot reach it.
 - Salience side-channel: while compressing, the RSC flags spans worth writing to the lossless store.
   **Compression and fact extraction in one forward pass** — this unifies S1 with the Ledger's
   transcript slot.
 - Ship behind a feature flag; **A/B against the compaction ladder on the locked eval suite**
-- Train on **Kaggle 2×T4**: ~2–6 GB VRAM, minutes per run, dozens of experiments a week
+- ⚠️ **Design for swappability.** Four substantive papers in five months (GDN-2 May, EDA Jun,
+  query-erase Aug, TERN Sep). One `RecurrentOperator` protocol, the state tensor shape
+  (16×128×128) as the contract, the operator chosen by **YAML flag**, and every rung permanently a
+  row in the eval table. Pin the arXiv ID and date you implemented against.
 - **Exit test:** RSC beats the compaction ladder on the eval suite **and** holds needle recall
-  ≥ baseline. Design so RSC failure degrades to *"FRIDAY searches memory more often,"* never
-  *"FRIDAY forgets."*
+  ≥ baseline, **and `L_erase` improves under EDA vs GDN-2** (if it doesn't, the address-level
+  coupling wasn't binding on your data — publish that too). Design so RSC failure degrades to
+  *"FRIDAY searches memory more often,"* never *"FRIDAY forgets."*
 
 ### **Phase 4 — Proactivity (Weeks 9–11)**
 *Deliverable: FRIDAY speaks first, and you're glad it did.*

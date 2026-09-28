@@ -17,6 +17,35 @@
 > module that compresses unbounded history into a fixed-size state *and* emits a salience
 > side-channel feeding fact extraction. Compression and memory in one forward pass. Fits a free
 > Kaggle T4. Nobody has published this for a personal assistant.
+>
+> ### ⚡ UPDATE — [13-GATED-DELTANET2-ERASE-WRITE.md](docs/architecture/13-GATED-DELTANET2-ERASE-WRITE.md)
+>
+> The RSC's operator is now specified: **NVIDIA's Gated DeltaNet-2** ([arXiv 2605.22791](https://arxiv.org/abs/2605.22791),
+> May 2026, code on NVlabs) which **decouples erase from write** into separate channel-wise gates.
+> Its own ablation says **the erase gate accounts for most of the gain** — and erasing accumulated
+> transient noise is exactly FRIDAY's dominant memory problem. It moves RULER needle retrieval
+> **63 → 90**, i.e. it targets the precise benchmark doc 12 named as decisive.
+>
+> **Three corrections:** (1) *"permanent associative records"* is a category error — 90 ≠ 100 and
+> nothing in a fixed-size state is permanent, so **Law 2b stands**; (2) it **cannot** go in Phase 0 —
+> the NVlabs repo is a *training* harness with **no inference server, no GGUF, no llama.cpp support**,
+> and you cannot put GDN-2 layers inside a frozen LFM2; (3) **SWA is a layer, not your retrieval
+> store.** It goes in **Phase 3.5 as the RSC's operator**, with a frozen backbone — where every
+> blocker disappears.
+>
+> **Plus a successor that fits FRIDAY better: EDA** ([2606.26560](https://arxiv.org/abs/2606.26560),
+> Jun 2026) — *"GDN-2 decouples **how strongly** erase and write are applied; EDA decouples
+> **where**."* GDN-2 still cannot clear a stale association stored at a *different address* than the
+> current write, which is precisely FRIDAY's bi-temporal correction case. They compose.
+>
+> ⭐ **And the genuinely new idea:** GDN-2 has three gate branches (decay α_t, erase b_t, write w_t)
+> and FRIDAY's Memory Compiler already computes three matching signals — the **decay function**,
+> **retraction events**, and the **salience head**. Retractions yield `(key_old, key_new)` pairs:
+> free supervision for EDA's independently-addressed erase. **A recurrent memory operator supervised
+> by a bi-temporal knowledge base.** → [13 §4.1](docs/architecture/13-GATED-DELTANET2-ERASE-WRITE.md)
+>
+> **Phase 0 is unchanged.** The only immediate action: start recording retraction pairs in Phase 1 —
+> they're `L_erase`'s training data and you can't backfill them.
 
 **A personal AI agent that compiles your life into a progressively smaller, cheaper, more personal
 model.**
@@ -53,6 +82,7 @@ Everything below is researched, sourced, and sized against real hardware.
 | **[10-phase-0-implementation.md](docs/architecture/10-phase-0-implementation.md)** | ⭐ **Start coding here.** A day-by-day Week 1: benchmark your machine, WSL2 config, repo skeleton, real `SOUL.md`/`AGENTS.md`/`USER.md`, the Markdown→SQLite compiler, retrieval, the agent loop, a 12-point exit test |
 | [11-research-sources.md](docs/architecture/11-research-sources.md) | Every source, grouped, with the specific data taken from each. Plus two claims to treat carefully |
 | **[12-LINEAR-ATTENTION-PIVOT.md](docs/architecture/12-LINEAR-ATTENTION-PIVOT.md)** | ⭐ **NEW — read after 00.** The hybrid linear-attention pivot: why RetNet specifically is the wrong choice (proven recall failure), the two-memory split, **Track A** production backbone (LFM2/LFM2.5, RWKV-7), **Track B** the Retention State Compiler, **Track C** custom architecture + the honest ₹0/from-scratch token math, the ₹0 budget consequences, and the revised roadmap |
+| **[13-GATED-DELTANET2-ERASE-WRITE.md](docs/architecture/13-GATED-DELTANET2-ERASE-WRITE.md)** | ⭐ **NEW — read after 12.** Specifies the RSC's recurrent operator: **Gated DeltaNet-2** (decoupled channel-wise erase/write gates, NVIDIA May 2026) and its successor **EDA** (decoupled erase/write *addresses*, Jun 2026). Verified math and benchmarks, the full DeltaNet→KDA→GDN-2→EDA lineage, three corrections to the proposal, the **gate-supervision synthesis**, a 5-rung ablation ladder, the T4/Triton engineering reality, and the swappable-operator design |
 
 ---
 
@@ -69,10 +99,16 @@ Everything below is researched, sourced, and sized against real hardware.
 | 7 | **Presence Fabric** | One *room*, many *surfaces*. Phone → laptop, mid-sentence. |
 | 8 | **The Sense Registry** | Tiered consent, enforced deterministically in the data layer |
 | **9** | ⭐ **The Two-Memory Split + Retention State Compiler** | A **lossy O(1) recurrent state** carries conversational *context*; a **lossless external store** carries *facts*. A trained gated-delta module compiles one into the other — and its **salience head feeds fact extraction in the same forward pass**. Compression and memory, unified. *([12](docs/architecture/12-LINEAR-ATTENTION-PIVOT.md))* |
+| **9b** | ⭐ **Gate supervision from a bi-temporal knowledge base** | GDN-2/EDA expose three gate branches — **decay α_t, erase b_t, write w_t**. FRIDAY's Memory Compiler already computes three matching signals: the **decay function**, **retraction events** (which yield `(key_old, key_new)` pairs — free supervision for EDA's *independently-addressed* erase), and the **salience head**. A recurrent memory operator whose forgetting is supervised by what the compiler decided to keep. *([13](docs/architecture/13-GATED-DELTANET2-ERASE-WRITE.md))* |
 
 > Innovation 9 rests on a distinction the literature hands us directly: *"a hybrid paired with
 > retrieval **sidesteps** the recall gap rather than solving it: you do not ask the recurrent state
 > to memorize a fact you can fetch from an index."* FRIDAY already has the index.
+>
+> Innovation 9b is the part that isn't in any paper I found: 9's store was built to *answer
+> questions*, and it turns out to also be a **supervision signal for the state's forgetting**.
+> Decoupled erase/write is what makes that supervision expressible at all — under a scalar tie
+> (Gated DeltaNet, KDA) there is no separate erase knob to supervise.
 
 ---
 
