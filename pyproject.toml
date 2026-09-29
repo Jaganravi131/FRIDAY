@@ -1,0 +1,52 @@
+[project]
+name = "friday"
+version = "0.1.0"
+description = "FRIDAY — a personal AI agent that compiles your life into a progressively smaller, cheaper, more personal model."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+
+# ── The core is deliberately STDLIB-ONLY. ───────────────────────────────────────
+# `pip install -e .` with zero dependencies must give you a working memory system:
+# Markdown truth -> SQLite/FTS5 indices -> retrieval -> Attention Ledger -> agent
+# loop -> RSC operators. Optional extras below add GPU/embedding/reranker quality,
+# never correctness. If an extra is missing the code degrades to a documented
+# fallback instead of raising ImportError. This is what makes the whole thing
+# runnable on a 16 GB laptop with no CUDA and on a free Kaggle T4 alike.
+dependencies = []
+
+[project.optional-dependencies]
+# Real semantic retrieval. Without it: HashingEmbedder (deterministic, lexical).
+embed = ["sentence-transformers>=2.7", "onnxruntime>=1.17"]
+# Real cross-encoder reranking. Without it: lexical-overlap reranker.
+rerank = ["onnxruntime>=1.17"]
+# File-watcher so hand-edits to memory/facts/*.md take effect in <1s (Law 7).
+watch = ["watchdog>=4.0"]
+# The CLI you'll actually live in.
+cli = ["rich>=13.7", "prompt_toolkit>=3.0"]
+# Retention State Compiler training. Pure-Python fallback runs without these.
+rsc = ["numpy>=1.26"]
+rsc-gpu = ["numpy>=1.26", "torch>=2.3"]
+# Telemetry / scheduling.
+serve = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "apscheduler>=3.10"]
+dev = ["pytest>=8.0", "ruff>=0.5"]
+
+all = ["friday[embed,rerank,watch,cli,rsc,serve,dev]"]
+
+[project.scripts]
+friday = "friday.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["friday"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"

@@ -1,0 +1,55 @@
+# ── artifacts are BUILD OUTPUTS ────────────────────────────────────────────────
+# Law: `rm -rf artifacts && python -m friday build` restores everything.
+# Truth lives in Markdown under memory/ and soul/. Never commit derived state.
+artifacts/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# ── models & weights ───────────────────────────────────────────────────────────
+*.gguf
+*.safetensors
+*.onnx
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.npz
+
+# ── ambient capture NEVER leaves the machine, never gets committed ─────────────
+capture/
+memory/traces/*.jsonl.gz
+memory/traces/*.jsonl
+
+# ── python ─────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ── secrets ────────────────────────────────────────────────────────────────────
+# Markdown IS git-pushed, so no credential may ever live in soul/ or memory/.
+*.pem
+*.key
+credentials*
+secrets.*
+
+# ── node / surfaces ────────────────────────────────────────────────────────────
+node_modules/
+dist/
+.turbo/
+
+# ── editor / os ────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
