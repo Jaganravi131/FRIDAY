@@ -94,6 +94,13 @@ jobs:
           fi
           echo "no user data tracked"
 
+      - name: Retrieval regression gate (Law 10)
+        # A merely *worse* answer raises no exception, so nothing else in this workflow
+        # would notice retrieval rotting. Model-free and ~0.1s: it scores a fixed
+        # synthetic corpus, so it needs no server and no secrets, and it compares against
+        # the baseline recorded in BENCHMARKS.md.
+        run: python -m friday bench --gate
+
       - name: No stray build artifacts in the working tree
         run: |
           test -z "$(git status --porcelain)" || { git status --short; exit 1; }

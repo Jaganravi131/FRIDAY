@@ -18,6 +18,7 @@ mistakes that were made while building them:
 from __future__ import annotations
 
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -285,6 +286,90 @@ def test_cli_doctor_exits_nonzero_only_on_failure(monkeypatch, tmp_path, capsys)
 class _Completed:
     def __init__(self, rc, out, err=""):
         self.returncode, self.stdout, self.stderr = rc, out, err
+
+
+# ── bench: the retrieval regression gate ───────────────────────────────────────
+
+def test_bench_runs_model_free_and_scores_the_known_defect(tmp_path):
+    """Pins the baseline behaviour, including the defect it exists to expose."""
+    from friday import bench
+
+    res = bench.run()
+    assert res.facts == 13 and res.queries == 27 and res.unanswerable == 5
+    # Law 4 and Law 6 must hold even while recall is mediocre
+    assert res.false_positive_rate == 0.0, "returning something for an unanswerable query"
+    assert res.provenance_complete == 1.0, "a shipped fact without a quote breaks /why"
+    # Noun phrases work; natural language does not. This is the defect, measured.
+    assert res.by_class["noun"]["recall_at_5"] > 0.8
+    assert res.by_class["paraphrase"]["recall_at_5"] < 0.3
+    assert res.interrogative_gap > 0.1
+    assert res.seconds < 30
+
+
+def test_bench_gate_passes_on_its_own_baseline(tmp_path):
+    from friday import bench
+
+    res = bench.run()
+    path = tmp_path / "BENCHMARKS.md"
+    path.write_text(bench.render_md(res, when="2026-09-30T00:00:00Z"), encoding="utf-8")
+    assert bench.read_baseline(path)["recall_at_5"] == res.recall_at_5
+    ok, msgs = bench.gate(res, path)
+    assert ok, msgs
+
+
+def test_bench_gate_fails_on_a_worse_run(tmp_path):
+    """The gate must bite, or it is documentation with extra steps."""
+    from friday import bench
+
+    res = bench.run()
+    path = tmp_path / "BENCHMARKS.md"
+    strict = bench.render_md(res, when="x").replace(
+        f"| `recall_at_5` | {res.recall_at_5} |", "| `recall_at_5` | 0.99 |")
+    path.write_text(strict, encoding="utf-8")
+    ok, msgs = bench.gate(res, path)
+    assert not ok
+    assert any("REGRESSION recall_at_5" in m for m in msgs)
+
+
+def test_bench_gate_fails_when_no_baseline_exists(tmp_path):
+    from friday import bench
+
+    ok, msgs = bench.gate(bench.run(), tmp_path / "absent.md")
+    assert not ok and "no baseline" in msgs[0]
+
+
+def test_bench_gate_fails_on_a_rising_false_positive_rate(tmp_path):
+    """Lower-is-better metrics need their own direction, not the shared tolerance."""
+    from friday import bench
+
+    res = bench.run()
+    path = tmp_path / "BENCHMARKS.md"
+    path.write_text(bench.render_md(res, when="x"), encoding="utf-8")
+    res.false_positive_rate = 0.4
+    ok, msgs = bench.gate(res, path)
+    assert not ok
+    assert any("false_positive_rate" in m and "Law 4" in m for m in msgs)
+
+
+def test_bench_restores_the_callers_environment(tmp_path, monkeypatch):
+    """⭐ It rebinds paths to a temp dir that it then DELETES.
+
+    The original bug: after `bench.run()` the process believed FRIDAY_ROOT was
+    `/tmp/friday-bench-XXXX`, already removed by the TemporaryDirectory context manager.
+    Every later operation would read from, or silently recreate, an empty root — and
+    since the gate runs on every commit, it would have poisoned whatever ran after it.
+    """
+    from friday import bench, paths
+
+    monkeypatch.setenv("FRIDAY_ROOT", str(tmp_path))
+    paths.rebind(tmp_path)
+    paths.ensure_layout()
+
+    bench.run()
+
+    assert Path(os.environ["FRIDAY_ROOT"]) == tmp_path
+    assert paths.ROOT == tmp_path
+    assert paths.ROOT.exists(), "left pointing at a deleted temp directory"
 
 
 # ── serve ──────────────────────────────────────────────────────────────────────

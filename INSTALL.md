@@ -133,6 +133,7 @@ Q4_K_M that means:
 |---|---|---|
 | **Qwen3 14B** | ~8.5 GB | The ceiling. Works, but close other tabs. Apache 2.0 |
 | **Gemma 3 12B** | ~6.7 GB | ⭐ **The daily driver** — real headroom, strong all-round |
+| **LFM2-8B-A1B** | ~5 GB (MoE, **1B active**) | ⭐ Best trade here: 8B of knowledge at ~1B of decode cost, and MoE suits *shared* iGPU memory. Claimed 30–38 t/s on this class of machine — **verify with `llama-bench` before believing it, including this sentence** |
 | **gpt-oss-20b** | ~11 GB (MoE, 3.6B active) | Excellent reasoning, fast because few params are active; tight fit |
 | **Qwen3 8B** | ~5.0 GB | Comfortable; spend the savings on a longer context |
 | Qwen3 4B / LFM2.5-1.2B | 2.6 / 0.8 GB | Only if you want an always-on background model |

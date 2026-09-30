@@ -20,6 +20,8 @@ Subcommands:
                fix beats a README describing the author's computer.
     serve      ⭐ the HTTP gateway — reach FRIDAY from your phone. Authenticated,
                loopback by default, remote turns audited as `remote`.
+    bench      ⭐ the retrieval regression gate. Law 10 says every fine-tune must
+               re-run the needle test; this makes "must" a nonzero exit code.
 
 `rich` is used if installed and ignored if not. The Ledger printout is on by
 default in ask/chat because looking at it for a week teaches more about context
@@ -501,6 +503,30 @@ def cmd_doctor(args) -> int:
     return 1 if rep.failed else 0
 
 
+def cmd_bench(args) -> int:
+    """`friday bench` — did retrieval just get worse?
+
+    A merely *worse* answer raises no exception, which is why Law 10's "re-run the
+    needle test after every fine-tune" gets skipped. This makes it a gate. Model-free
+    and about a second, so it can run on every commit; `scripts/needle_test.py` still
+    covers a real model's long-range recall.
+    """
+    from .bench import main as bench_main
+
+    argv = []
+    if args.record:
+        argv.append("--record")
+    if args.gate:
+        argv.append("--gate")
+    if args.json:
+        argv.append("--json")
+    if args.verbose:
+        argv.append("--verbose")
+    if args.file:
+        argv += ["--file", args.file]
+    return bench_main(argv)
+
+
 def cmd_serve(args) -> int:
     """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
 
@@ -602,6 +628,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_doctor); common(p)
     p.add_argument("--root", default=None, help="FRIDAY_ROOT to inspect (default: current)")
     p.add_argument("--json", action="store_true", help="machine-readable report")
+
+    p = sub.add_parser("bench", help="⭐ the retrieval regression gate (Law 10)")
+    p.set_defaults(fn=cmd_bench); common(p)
+    p.add_argument("--record", action="store_true", help="write BENCHMARKS.md baseline")
+    p.add_argument("--gate", action="store_true", help="exit 1 if worse than baseline")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--verbose", action="store_true", help="per-query results")
+    p.add_argument("--file", default=None, help="BENCHMARKS.md path")
 
     p = sub.add_parser("serve", help="⭐ the HTTP gateway — reach FRIDAY from your phone")
     p.set_defaults(fn=cmd_serve); common(p)
