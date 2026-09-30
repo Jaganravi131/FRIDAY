@@ -79,21 +79,49 @@ class CompactionEvent:
 class LadderResult:
     events: list[CompactionEvent] = field(default_factory=list)
     summarised: bool = False
+    #: ⭐ Protected slots that still do not fit after every rung has fired. The ladder
+    #: refuses to touch them, so "still over" is a fact about the user's files, not
+    #: something more compaction can fix. Reported rather than resolved.
+    required_overflow: list[str] = field(default_factory=list)
 
     @property
     def highest_rung(self) -> int | None:
         return max((e.rung for e in self.events), default=None)
 
     def summary(self) -> str:
-        if not self.events:
+        parts = [str(e) for e in self.events]
+        if self.required_overflow:
+            parts.append(
+                "REQUIRED OVER: " + ", ".join(self.required_overflow)
+                + " (stable prefix is never compacted — shorten the file)")
+        if not parts:
             return "none"
-        return ", ".join(str(e) for e in self.events)
+        return ", ".join(parts)
 
 
 # ── rung 0 ─────────────────────────────────────────────────────────────────────
 
+#: ⭐ The stable prefix is not ladder fuel.
+#:
+#: Rungs 1, 3, 4 and 5 each name the slots they may touch ("docs", "recalled",
+#: "scratch", "transcript"), so they could never reach the prefix. Rungs 0 and 2,
+#: however, iterate EVERY block — and rung 0 fires unconditionally on the first pass.
+#: That meant a SOUL.md longer than TOOL_OUTPUT_CAP_TOKENS (2000) was silently capped
+#: by a rung whose own docstring says it exists for tool output, and `cap_tokens`
+#: stamped it with "full output offloaded, use read_artifact to pull it back" — an
+#: instruction that could never be followed, because slot-level capping writes no
+#: artifact. The lie then sat in the byte-stable CACHED prefix on every turn.
+#:
+#: docs/architecture/04 gives `identity` overflow="reject" and required=True. Reject
+#: means "tell the human", not "quietly rewrite FRIDAY's character".
+PROTECTED_SLOTS = frozenset({"identity", "senses"})
+
+
 def rung0_cap(text: str, budget: int) -> tuple[str, CompactionEvent | None]:
-    """CAP a tool output before it enters history. Always on, always free."""
+    """CAP a tool output before it enters history. Always on, always free.
+
+    Never call this on a PROTECTED_SLOTS block — see that constant for why.
+    """
     before = approx_tokens(text)
     capped = cap_tokens(text, budget)
     after = approx_tokens(capped)
@@ -229,6 +257,8 @@ def descend(
 
     # Rung 0 is unconditional: cap every tool-output-looking block.
     for slot, items in blocks.items():
+        if slot in PROTECTED_SLOTS:      # the prefix is not tool output
+            continue
         for i, b in enumerate(items):
             new, ev = rung0_cap(b, tool_cap)
             if ev:
@@ -238,7 +268,11 @@ def descend(
         return blocks, turns, res
 
     # Rung 2: dedupe. Cheaper than truncation because it removes *redundant* bytes.
+    # Still skipped for the prefix: "redundant" is a judgement about prose, and a
+    # personality file repeats itself on purpose.
     for slot, items in list(blocks.items()):
+        if slot in PROTECTED_SLOTS:
+            continue
         new, ev = rung2_dedupe(items, slot)
         if ev:
             blocks[slot] = new
@@ -269,6 +303,10 @@ def descend(
         # If we're still over, the honest move is to widen the window (a hybrid
         # can — the state is fixed-size) or drop a low-value slot wholesale.
         # Never to summarise.
+        res.required_overflow = [
+            sl for sl in PROTECTED_SLOTS
+            if approx_tokens("\n".join(blocks.get(sl) or [])) > budget
+        ]
         return blocks, turns, res
 
     # Rung 1: truncate the largest remaining block.
@@ -308,6 +346,15 @@ def descend(
             res.summarised = True
             if over() <= 0:
                 break
+
+    # Every rung has fired. If the prefix ALONE still exceeds the budget there is
+    # nothing left to compact, and saying so is the whole point of overflow="reject".
+    if over() > 0:
+        res.required_overflow = [
+            sl for sl in ("identity", "senses")
+            if approx_tokens("\n".join(blocks.get(sl) or [])) > 0
+            and approx_tokens("\n".join(blocks.get(sl) or [])) > budget
+        ]
     return blocks, turns, res
 
 

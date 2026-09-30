@@ -64,13 +64,27 @@ class CompiledContext:
             f"prefix_stable={self.prefix_stable_runs}"
         )
         rows = []
-        for name, s in self.slots.items():
-            rows.append(f"{name} {s.tokens}/{s.budget}" + ("*" if s.truncated else ""))
+        for name, sl in self.slots.items():
+            # ⚠OVER is louder than * on purpose: a truncated JIT slot is the ladder
+            # doing its job, while an over-budget REQUIRED slot means the stable
+            # prefix could not fit and was shipped whole — that needs a human decision.
+            mark = "\u26a0OVER" if sl.over_budget else ("*" if sl.truncated else "")
+            rows.append(f"{name} {sl.tokens}/{sl.budget}{mark}")
         # Hoisted out of the f-string: a backslash escape is not permitted inside an
         # f-string expression part before Python 3.12, and this has to run on 3.11.
         reserve_mark = "\u2713" if self.reserve > 0 else "\u2717 OVER"
+        over = [n for n, s in self.slots.items() if s.over_budget]
+        over_line = ""
+        if over:
+            over_line = (
+                f"\u2502 \u26a0 REQUIRED SLOT OVER BUDGET: {', '.join(over)} shipped "
+                f"whole rather than truncated.\n"
+                f"\u2502   Shorten the file or raise its budget in LEDGER_SLOTS. "
+                f"The stable prefix is never rationed.\n"
+            )
         return (
             "\u250c " + head + "\n"
+            + over_line +
             "\u2502 " + " \u00b7 ".join(rows[:4]) + "\n"
             "\u2502 " + " \u00b7 ".join(rows[4:]) + "\n"
             f"\u2502 overflow: {self.overflow}   reserve: {self.reserve} "
@@ -91,6 +105,12 @@ class Gather:
     scratch: str = ""
     senses: list[str] = field(default_factory=list)
     state_block: str | None = None                       # ⭐ RSC output, when present
+    #: ⭐ The current date/time, when the turn needs it. A local model has no reliable
+    #: clock, so "what time is it?" cannot be answered from weights — and the tool
+    #: contract deliberately withholds memory for it, so it cannot be answered from
+    #: facts either. Injecting the reading is what makes the contract produce an
+    #: ANSWER rather than "I don't have that in memory".
+    now: str = ""
 
 
 class Ledger:
@@ -152,7 +172,18 @@ class Ledger:
         _fill(slots["recalled"], recalled)
 
         _fill(slots["docs"], "\n\n".join(g.docs))
-        _fill(slots["scratch"], g.scratch)
+
+        # ⚠️ `now` goes in a JIT SLOT, never in `identity` or `senses`. Those two form
+        # the stable cached prefix and must be byte-identical across turns; a ticking
+        # clock in either would invalidate the provider's prompt cache on every single
+        # turn, which is the exact cost Law 2 exists to prevent (exit test #7 measures
+        # cache_hit_rate >= 0.85 over 50 turns). Scratch is JIT and small, so it is the
+        # cheap correct home. Phase 3 (perception) should give ambient readings their
+        # own JIT slot rather than sharing this one.
+        scratch = g.scratch
+        if g.now:
+            scratch = f"[now] {g.now}" + (f"\n{scratch}" if scratch else "")
+        _fill(slots["scratch"], scratch)
 
         # transcript: per-turn, because eviction is per-turn
         blocks = {
@@ -180,6 +211,12 @@ class Ledger:
             )
         else:
             res = ladder.LadderResult()
+        # A protected slot that the ladder could not fix is still over budget, and
+        # must be reported even when the slot-level check in _fill passed (it can
+        # pass: 1234 < 1536 slot budget, but > available once every other slot fills).
+        for name in res.required_overflow:
+            if name in slots.slots:
+                slots[name].over_budget = True
 
         # write post-ladder content back into the slots
         for name, items in blocks.items():
@@ -189,6 +226,14 @@ class Ledger:
             before = s.content
             s.content = "\n\n".join(items)
             s.tokens = approx_tokens(s.content)
+            if s.stable:
+                # ⭐ Belt and braces: ladder.PROTECTED_SLOTS should mean the prefix
+                # never shrinks here. If it ever did, that is a bug in a rung, and the
+                # honest response is to flag it as over-budget rather than to record a
+                # routine truncation that nobody would look twice at.
+                if s.tokens < approx_tokens(before) - 1:
+                    s.over_budget = True
+                continue
             s.truncated = s.tokens < approx_tokens(before) - 1
         if self.hybrid and turns:
             _fill(slots["transcript"], _render_turns(turns))
@@ -268,16 +313,39 @@ def _read(p: Path) -> str:
 
 
 def _fill(slot: Slot, text: str) -> None:
-    """Fill a slot, hard-truncating at its budget. Truncation here is slot-level
-    rationing (deterministic, cheap); the *ladder* is for whole-context pressure."""
+    """Fill a slot, rationing at its budget — EXCEPT the stable prefix.
+
+    Truncation here is slot-level rationing (deterministic, cheap); the *ladder* is
+    for whole-context pressure.
+
+    ⭐ STABLE SLOTS ARE NEVER TRUNCATED. `identity` and `senses` are `required` and
+    their overflow policy in docs/architecture/04 is "reject", not "truncate". Two
+    reasons, and the second is the one that hides:
+
+      1. Truncating `identity` silently edits FRIDAY's character. The seeded
+         SOUL.md + AGENTS.md is 1234 tokens against a 1024 budget, so this was not
+         hypothetical — the personality file was being capped on every install.
+      2. `cap_tokens` inserts a marker reading "full output offloaded, use
+         read_artifact to pull it back". Nothing was offloaded: slot-level rationing
+         never writes an artifact. So the prefix contained an instruction that could
+         not be followed, and because the prefix is CACHED, that lie was byte-stable
+         across every turn.
+
+    Instead the slot ships whole and sets `over_budget`, which the printout reports.
+    The fix is to shorten the file or raise the budget — a decision for the user, not
+    something to do to them silently.
+    """
     text = (text or "").strip()
     n = approx_tokens(text)
-    if n > slot.budget and slot.budget > 0:
-        from ..util import cap_tokens
+    if n > slot.budget > 0:
+        if slot.stable:
+            slot.over_budget = True
+        else:
+            from ..util import cap_tokens
 
-        text = cap_tokens(text, slot.budget)
-        n = approx_tokens(text)
-        slot.truncated = True
+            text = cap_tokens(text, slot.budget)
+            n = approx_tokens(text)
+            slot.truncated = True
     slot.content = text
     slot.tokens = n
 

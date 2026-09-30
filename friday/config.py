@@ -136,7 +136,16 @@ LEDGER_BUDGET_TOKENS = int(os.environ.get("FRIDAY_CTX", "8192"))
 #: Per-slot budgets. `identity` + `senses` form the STABLE CACHED PREFIX and must
 #: not change between turns or every turn re-prefills (Law 2).
 LEDGER_SLOTS: dict[str, int] = {
-    "identity": 1024,     # SOUL.md + AGENTS.md — the cached prefix
+    # ⭐ 1536, not the 1024 in docs/architecture/04's table. That table assumed a
+    # ~912-token identity; the seeded SOUL.md alone is 889 and AGENTS.md is 344, so a
+    # fresh install shipped with its personality permanently over budget. The choice
+    # was trim the soul or raise the number, and the soul contains the honesty rules,
+    # retraction semantics and code-switching policy that make this a product rather
+    # than a demo — deleting those to satisfy a table cell is backwards. Slot budgets
+    # are soft caps (they already sum above budget - reserve; the ladder handles total
+    # pressure), so +512 here costs nothing structurally. Doc 04's table is the stale
+    # side of this disagreement.
+    "identity": 1536,     # SOUL.md + AGENTS.md — the cached prefix, never rationed
     "user": 512,          # USER.md (hard budget 1,400 chars ~ 350 tokens)
     "core_mem": 640,      # MEMORY.md — the ~20 facts that matter most
     "senses": 256,        # which senses are enabled right now

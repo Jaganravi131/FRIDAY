@@ -64,20 +64,80 @@ class CompileStats:
 
 # ── facts ──────────────────────────────────────────────────────────────────────
 
+def _origin_hash_matches(conn: sqlite3.Connection, path: Path, fhash: str) -> bool:
+    """Has this exact content already been accounted for, by either record?
+
+    ⚠️ BOTH records are consulted and EITHER one matching means "not stale". This is
+    not belt-and-braces redundancy — the two are maintained by different writers:
+
+      * `facts.origin_hash` is updated by `assert_fact` every time FRIDAY writes a
+        fact. That is the entire loop-safety mechanism: without it, FRIDAY's own
+        Markdown write would be detected as a hand-edit, recompiled, re-audited as
+        the user, and could feed itself. Checking only origin_state regressed exactly
+        this, and test_fridays_own_write_is_not_reported_as_a_hand_edit caught it.
+      * `origin_state.origin_hash` is updated by `compile_file`, and is the only
+        record that exists for a file that yields ZERO facts.
+
+    A file FRIDAY just wrote matches on `facts`; a notes-only file matches on
+    `origin_state`; a genuine hand-edit matches on neither.
+    """
+    try:
+        row = conn.execute(
+            "SELECT origin_hash FROM origin_state WHERE origin_file=?", (str(path),)
+        ).fetchone()
+        if row is not None and row["origin_hash"] == fhash:
+            return True
+    except sqlite3.OperationalError:            # table not created yet
+        pass
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM facts WHERE origin_file=? AND origin_hash=?",
+        (str(path), fhash),
+    ).fetchone()
+    return bool(row and row["n"] > 0)
+
+
+def _record_origin(conn: sqlite3.Connection, path: Path, fhash: str, n: int) -> None:
+    """Remember that this content was compiled, even if it produced no facts.
+
+    Called on the zero-fact path too — that is the entire reason the table exists.
+    """
+    from datetime import datetime, timezone
+
+    try:
+        conn.execute(
+            """INSERT INTO origin_state(origin_file, origin_hash, facts_derived, compiled_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(origin_file) DO UPDATE SET
+                 origin_hash=excluded.origin_hash,
+                 facts_derived=excluded.facts_derived,
+                 compiled_at=excluded.compiled_at""",
+            (str(path), fhash, n,
+             datetime.now(timezone.utc).isoformat(timespec="seconds")),
+        )
+    except sqlite3.OperationalError:
+        # An old database without the table must still compile. It loses incrementality
+        # for zero-fact files only, which is the pre-fix behaviour, not a new failure.
+        pass
+
+
 def compile_file(path: Path, conn: sqlite3.Connection, *, embedder=None) -> int:
     """Parse one Markdown facts file -> upsert rows. Returns count written.
 
     Incremental: if (origin_file, origin_hash) is unchanged we skip the file
     entirely. A hand-edit changes the hash and re-derives *only that file*.
+
+    ⭐ The unchanged check reads `origin_state`, NOT `facts`. Counting fact rows looks
+    equivalent until a file yields none: a notes-only .md in memory/facts/ would then
+    have COUNT(*)==0 forever, be treated as stale on every turn, and write an audit row
+    for a hand-edit that never happened. `origin_state` records the hash of what was
+    last compiled regardless of how many facts came out of it. The `facts` query is
+    kept as a fallback so a database written before that table existed still upgrades
+    by recompiling once, rather than by losing its incremental behaviour.
     """
     text = path.read_text(encoding="utf-8")
     fhash = hashlib.sha256(text.encode()).hexdigest()
 
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM facts WHERE origin_file=? AND origin_hash=?",
-        (str(path), fhash),
-    ).fetchone()
-    if row and row["n"] > 0:
+    if _origin_hash_matches(conn, path, fhash):
         return -1  # sentinel: unchanged
 
     ff = mdfacts.parse_facts_text(text, path)
@@ -174,6 +234,7 @@ def compile_file(path: Path, conn: sqlite3.Connection, *, embedder=None) -> int:
         # `superseded_by`. Pairs from live conversation cannot be.
         if fl.retracted and fl.superseded_by and fl.superseded_by in seen_ids:
             _record_pair_from_markdown(conn, path, fl, ff)
+    _record_origin(conn, path, fhash, n)
     return n
 
 

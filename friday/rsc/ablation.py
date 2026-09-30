@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import math
+import hashlib
 import random
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -50,10 +51,35 @@ class ProbeResult:
     detail: dict[str, Any] = field(default_factory=dict)
 
 
+def _stable_seed(*parts: Any) -> int:
+    """A 64-bit seed that is the SAME IN EVERY PROCESS, derived from `parts`.
+
+    ⚠️ This replaced `hash((word, seed))`, and the difference is the whole point.
+    Python's built-in `hash()` for str/bytes/tuple is randomised per process unless
+    PYTHONHASHSEED is set, so every key drawn from it was different on every run. The
+    old docstring here claimed "same word -> same key, so a probe run twice gives the
+    same answer" — which was false, and observably so: `test_probe_associative_...`
+    passed twice and failed on the third run in the same working tree.
+
+    For a research harness that is not a minor annoyance. It means every number in
+    the ablation report was a sample from an unseeded distribution rather than a
+    measurement, so a ladder that "passed" might have been lucky, and a regression
+    would have been unattributable — you could not tell whether the operators changed
+    or the keys did. Reproducibility is the precondition for the report meaning
+    anything at all.
+    """
+    payload = "|".join(str(x) for x in parts).encode("utf-8")
+    return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little")
+
+
 def _key_for(word: str, d: int, seed: int = 0) -> list[float]:
-    """A deterministic pseudo-random unit key for a symbol. Same word -> same key,
-    so a probe run twice gives the same answer."""
-    rng = random.Random(hash((word, seed)) & 0xFFFFFFFF)
+    """A deterministic pseudo-random unit key for a symbol.
+
+    Same (word, d, seed) -> the same key, in every process, on every machine. That
+    property is what makes the probe a measurement instead of a sample; see
+    `_stable_seed` for what happens when it is absent.
+    """
+    rng = random.Random(_stable_seed(word, d, seed))
     return l2_normalise([rng.gauss(0, 1) for _ in range(d)])
 
 

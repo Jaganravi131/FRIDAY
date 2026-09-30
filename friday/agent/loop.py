@@ -26,6 +26,8 @@ from ..memory.traces import Trace, TraceWriter
 from ..retrieval.pipeline import search
 from ..util import approx_tokens, new_id, now_iso
 from .policy import check, refusal
+from ..memory import watcher as memory_watcher
+from .routing import classify_turn, tools_for
 from .tools import ToolContext, build_registry
 
 
@@ -49,6 +51,11 @@ class State:
     char_span: tuple[int, int] = (0, 0)
     tool_log: list[dict] = field(default_factory=list)
     retrieved: list[dict] = field(default_factory=list)
+    #: The tool-contract decision for this turn. Recorded so "it forgot" can be
+    #: distinguished from "it decided not to look" — those need different fixes.
+    intent: Any = None
+    #: What the memory watcher noticed before this turn (hand-edits, deletions).
+    memory_sync: Any = None
 
 
 class Agent:
@@ -64,6 +71,7 @@ class Agent:
         traces: TraceWriter | None = None,
         confirm: Callable[[str, dict], bool] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
+        watcher: memory_watcher.MemoryWatcher | None = None,
     ):
         self.conn = conn
         self.client = client
@@ -76,6 +84,10 @@ class Agent:
         #: agent must never take an irreversible action by default.
         self.confirm = confirm or (lambda name, args: False)
         self.on_event = on_event or (lambda kind, payload: None)
+        #: ⭐ Law 7: hand-edits to memory/*.md are picked up on the next turn, with no
+        #: restart. Default is the process-wide watcher so the CLI and a REPL share one
+        #: mtime cache; pass `False` to disable (evals that must not touch the tree).
+        self.watcher = memory_watcher.default_watcher() if watcher is None else watcher
 
     # ── the loop ───────────────────────────────────────────────────────────────
 
@@ -90,6 +102,29 @@ class Agent:
         st.transcript = self._recent_transcript(st.session_id)
         st.transcript.append({"role": "user", "content": user_turn})
 
+        # 0a. LAW 7 — pick up hand-edits to memory before answering, so that
+        # "edit housing.md, save, ask in the same breath" works. Cost is a stat() per
+        # memory file; the hash is only recomputed for files whose mtime moved.
+        if self.watcher is not None and self.watcher is not False:
+            try:
+                st.memory_sync = self.watcher.sync(self.conn, embedder=self.embedder)
+                if st.memory_sync.changed:
+                    self.on_event("memory_sync", {"summary": st.memory_sync.summary()})
+            except Exception as e:
+                # A watcher failure must never take the turn down with it. Answering
+                # from a slightly stale index beats not answering.
+                self.on_event("memory_sync_error", {"error": str(e)})
+
+        # 0b. THE TOOL CONTRACT — decide whether this turn needs memory at all, before
+        # spending on retrieval. Exit test #8: a trivial question must not call
+        # memory_search. Withholding the tool is structural; instructing the model is
+        # not.
+        st.intent = classify_turn(user_turn,
+                                  recent_turns=tuple(t["content"] for t in st.transcript[-4:]))
+        self.on_event("intent", {"kind": st.intent.kind,
+                                 "needs_memory": st.intent.needs_memory,
+                                 "reason": st.intent.reason})
+
         # S0: capture the user turn FIRST and keep its char span. The span is what
         # a salience label points at, and it cannot be recovered later.
         # scope is st.scope, not None: the policy engine already branched on it, so a
@@ -99,11 +134,18 @@ class Agent:
         _, cs, ce = self.traces.append(tr)
         st.char_span = (cs, ce)
 
-        # 1. RETRIEVE (Law 3: just-in-time, not pre-packed)
-        res = search(self.conn, user_turn, embedder=self.embedder, reranker=self.reranker,
-                     recent_turns=[t["content"] for t in st.transcript[-4:]])
-        st.retrieved = res.as_dicts()
-        self.on_event("retrieved", {"count": len(res), "summary": res.summary()})
+        # 1. RETRIEVE (Law 3: just-in-time, not pre-packed) — skipped entirely when the
+        # turn cannot need it. "what time is it" must not cost an embedding pass.
+        if st.intent.needs_memory:
+            res = search(self.conn, user_turn, embedder=self.embedder,
+                         reranker=self.reranker,
+                         recent_turns=[t["content"] for t in st.transcript[-4:]])
+            st.retrieved = res.as_dicts()
+            self.on_event("retrieved", {"count": len(res), "summary": res.summary()})
+        else:
+            st.retrieved = []
+            self.on_event("retrieved", {"count": 0,
+                                        "summary": f"skipped: {st.intent.reason}"})
 
         while not st.done and st.turn_idx < st.max_turns:
             # 2. COMPILE — deterministic, <5ms, no model call
@@ -114,6 +156,11 @@ class Agent:
                 transcript=st.transcript[-24:],
                 scratch=st.scratchpad,
                 senses=senses or [],
+                # ⭐ Act on the tool-contract classification. Skipping retrieval is
+                # only half of it: a clock question still deserves an answer, and a
+                # local model cannot read a wall clock. Supplying the reading is what
+                # turns "memory=skipped" from a shrug into a fast, correct reply.
+                now=_now_reading() if st.intent and st.intent.kind == "clock" else "",
             )
             st.compiled = self.ledger.compile(g, conn=self.conn)
             self.on_event("ledger", {"hash": st.compiled.ledger_hash,
@@ -124,7 +171,8 @@ class Agent:
             msgs = self._messages(st)
             st.messages = msgs
             try:
-                resp = self.client.chat(msgs, tools=self.registry.schemas())
+                resp = self.client.chat(msgs, tools=tools_for(st.intent,
+                                                                self.registry.schemas()))
             except RuntimeError as e:
                 if "cannot reach" in str(e):
                     st.final_text = (
@@ -263,6 +311,20 @@ class Agent:
         )
         self.conn.commit()
         return sid
+
+
+def _now_reading() -> str:
+    """The current date and time, in the user's own locale and zone.
+
+    Spelled out rather than left as an ISO stamp because the model has to say it back
+    naturally: "Tuesday, 30 September, 14:05" is an answer, "2026-09-30T14:05:11+05:30"
+    is a log line.
+    """
+    from datetime import datetime
+
+    d = datetime.now().astimezone()
+    zone = d.tzname() or ""
+    return (f"{d:%A, %d %B %Y}, {d:%H:%M} {zone}".replace("  ", " ").strip())
 
 
 def _stringify(obj: Any) -> str:

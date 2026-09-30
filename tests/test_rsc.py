@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 
 import pytest
+from pathlib import Path
 
 from friday.rsc.ablation import _gates, _rel_err
 from friday.rsc.operators import (
@@ -841,3 +842,77 @@ def test_format_report_is_readable_markdown():
     assert "retnet" in md and "kda" in md
     assert "|" in md
     assert "not" in md.lower(), "the report must say what it is NOT (a 1.3B result)"
+
+
+# ── ⭐ reproducibility: the precondition for the report meaning anything ──────
+
+
+def test_probe_keys_are_identical_across_processes():
+    """⭐⭐ Regression guard for a bug that made every number in the ablation report a
+    SAMPLE rather than a MEASUREMENT.
+
+    `_key_for` seeded its RNG with Python's built-in `hash()`, which is randomised per
+    process unless PYTHONHASHSEED is set. So the probe keys — and therefore the key
+    geometry the associative probe measures — were different on every run. Its
+    docstring claimed "same word -> same key, so a probe run twice gives the same
+    answer", which was false: one test passed twice and failed on the third run in an
+    unchanged working tree.
+
+    The only honest way to test cross-process stability is to actually spawn a process
+    with a different hash seed. Anything in-process proves nothing, because the whole
+    bug is that in-process looks fine.
+    """
+    import os
+    import subprocess
+    import sys
+
+    code = (
+        "import sys; sys.path.insert(0, %r);"
+        "from friday.rsc.ablation import _key_for;"
+        "print([round(x, 9) for x in _key_for('probe-key', 8, seed=3)])"
+    ) % str(Path(__file__).resolve().parent.parent)
+
+    outs = []
+    for hs in ("0", "1", "12345", "random"):
+        env = dict(os.environ, PYTHONHASHSEED=hs)
+        r = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                           text=True, env=env, timeout=120)
+        assert r.returncode == 0, r.stderr
+        outs.append(r.stdout.strip())
+
+    assert len(set(outs)) == 1, \
+        f"probe keys must not depend on the process hash seed:\n" + "\n".join(outs)
+
+
+def test_associative_probe_is_reproducible_run_to_run():
+    """Same seeds -> same scores, in THIS process and on a re-import. Pairs with the
+    subprocess test above: that one proves the keys are stable, this one proves the
+    score that comes out of them is too."""
+    from friday.rsc.ablation import probe_associative
+
+    first = [probe_associative(build("kda"), 32, 32, seed=s).score for s in range(5)]
+    second = [probe_associative(build("kda"), 32, 32, seed=s).score for s in range(5)]
+    assert first == second, (first, second)
+    # and the separation is robust across seeds, not a lucky draw
+    retnet = [probe_associative(build("retnet"), 32, 32, seed=s).score for s in range(8)]
+    assert all(r == 0.0 for r in retnet), retnet
+    assert all(k >= 0.6 for k in first), first
+
+
+def test_needle_and_interference_are_reproducible():
+    """The two probes whose results the docs quote as exact figures. If these drift,
+    the quoted numbers in docs/architecture/13 are wrong."""
+    from friday.rsc.ablation import probe_interference, probe_needle
+
+    n = probe_needle(build("retnet"), 32, 32, length=512, depths=(16, 64, 192, 400))
+    depths = list(n.detail["per_depth"].values())
+    # RetNet's fixed decay is 0.995 per step: this is the closed form, not a fit
+    for d, got in zip((16, 64, 192, 400), depths):
+        assert abs(got - 0.995 ** d) < 0.01, f"depth {d}: {got} vs {0.995 ** d}"
+
+    g = probe_interference(build("gdn2"), 32, 32, n_old=4, n_new=4)
+    e = probe_interference(build("eda"), 32, 32, n_old=4, n_new=4)
+    assert g.detail["retain_old"] == 1.0, \
+        "GDN-2's erase is anchored to the write key and cannot reach an orthogonal address"
+    assert e.detail["retain_old"] == 0.5, \
+        "EDA's independent erase address can — this is the rung-5 claim"

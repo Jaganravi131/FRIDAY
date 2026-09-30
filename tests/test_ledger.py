@@ -519,3 +519,70 @@ def test_log_telemetry_writes_a_row(conn, root):
     ).fetchone()
     assert row is not None
     assert row["turn_id"] == "t_1"
+
+
+# ── the stable prefix is incompressible ────────────────────────────────────────
+
+def test_required_slot_is_never_silently_truncated(root):
+    """`identity` has overflow="reject" in doc 04 — it ships whole and complains.
+
+    Silent truncation here is a double failure: it quietly edits FRIDAY's character,
+    and `cap_tokens` leaves a marker reading "use read_artifact to pull it back" in a
+    slot that never offloaded anything. Because the prefix is CACHED, that
+    un-followable instruction would be byte-stable on every turn.
+    """
+    from friday.ledger.compiler import Gather, Ledger
+
+    (root / "soul" / "SOUL.md").write_text("# SOUL\n\n" + "SOUL line.\n" * 4000,
+                                        encoding="utf-8")
+    c = Ledger().compile(Gather(query="hi", senses=[]))
+
+    ident = c.slots["identity"]
+    assert ident.over_budget is True
+    assert ident.truncated is False
+    assert "read_artifact" not in ident.content          # no phantom offload marker
+    assert approx_tokens(ident.content) >= 4000          # shipped whole
+    assert "OVER BUDGET" in c.printout()                 # and said so loudly
+
+
+def test_a_ticking_clock_never_enters_the_cached_prefix(root):
+    """The `now` reading must land in a JIT slot.
+
+    `identity` and `senses` form the byte-stable prefix. A clock in either would
+    invalidate the provider's prompt cache on every single turn — the exact cost Law 2
+    exists to prevent, and the thing exit test #7 measures across 50 turns.
+    """
+    from friday.ledger.compiler import Gather, Ledger
+
+    (root / "soul" / "SOUL.md").write_text("# SOUL\nI am FRIDAY.\n", encoding="utf-8")
+    led = Ledger()
+
+    def build(now):
+        return led.compile(Gather(query="what time is it", senses=[], now=now))
+
+    a, b = build("Monday, 1 January 2026, 09:00"), build("Tuesday, 2 February 2026, 17:45")
+
+    assert a.prefix_hash == b.prefix_hash                # prefix identical across time
+    assert a.ledger_hash != b.ledger_hash                # the JIT slot did change
+    assert "Monday" in a.slots["scratch"].content
+    assert "Tuesday" not in a.slots["scratch"].content
+
+
+def test_now_renders_alongside_existing_scratch(root):
+    from friday.ledger.compiler import Gather, Ledger
+
+    (root / "soul" / "SOUL.md").write_text("# SOUL\nsoul\n", encoding="utf-8")
+    c = Ledger().compile(Gather(query="q", scratch="user's own note", senses=[],
+                                now="Wednesday, 30 September 2026, 08:44 UTC"))
+    body = c.slots["scratch"].content
+    assert body.startswith("[now] Wednesday")
+    assert "user's own note" in body                     # the user's note survives
+
+
+def test_empty_now_leaves_scratch_untouched(root):
+    from friday.ledger.compiler import Gather, Ledger
+
+    (root / "soul" / "SOUL.md").write_text("# SOUL\nsoul\n", encoding="utf-8")
+    c = Ledger().compile(Gather(query="q", scratch="just notes", senses=[]))
+    assert c.slots["scratch"].content == "just notes"
+    assert "[now]" not in c.slots["scratch"].content

@@ -52,6 +52,21 @@ CREATE INDEX IF NOT EXISTS idx_facts_valid   ON facts(subject, valid_from, valid
 CREATE INDEX IF NOT EXISTS idx_facts_file    ON facts(origin_file, origin_hash);
 CREATE INDEX IF NOT EXISTS idx_facts_review  ON facts(review_after) WHERE retracted_at IS NULL;
 
+-- ⭐ Compiled-state record for EVERY Markdown fact file, including the ones that
+-- yield zero facts. Deriving staleness from `facts` alone
+-- (COUNT(*) WHERE origin_file=? AND origin_hash=?) makes a file with no parseable
+-- lines permanently "stale": no row is ever written, so the count stays 0, so it is
+-- recompiled, re-audited and re-reported on every single turn forever. That fills
+-- `audit --today` with phantom hand-edits and drowns the real ones — the opposite of
+-- what the audit trail is for. A notes-only or half-written .md dropped into
+-- memory/facts/ is an ordinary thing for a user to do.
+CREATE TABLE IF NOT EXISTS origin_state (
+    origin_file   TEXT PRIMARY KEY,
+    origin_hash   TEXT NOT NULL,
+    facts_derived INTEGER NOT NULL DEFAULT 0,
+    compiled_at   TEXT NOT NULL
+);
+
 -- ─── entity graph (SQLite, not Neo4j) ─────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS entities (
   id       TEXT PRIMARY KEY,

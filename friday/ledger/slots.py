@@ -50,6 +50,14 @@ class Slot:
     truncated: bool = False
     dropped_items: int = 0
     stable: bool = False
+    #: ⭐ Set when a REQUIRED slot could not fit its content and was shipped whole
+    #: anyway. docs/architecture/04 gives `identity` the overflow policy "reject" —
+    #: it is `required=True`, so it is not rationed like tool output. Silent
+    #: truncation of the stable prefix is the worse failure: it quietly edits
+    #: FRIDAY's personality AND leaves an elision marker in the cached prefix that
+    #: points at an artifact which was never written, so `read_artifact` cannot
+    #: recover it. Better to ship the whole thing and say so loudly.
+    over_budget: bool = False
 
     @property
     def utilisation(self) -> float:

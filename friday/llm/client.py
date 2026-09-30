@@ -246,7 +246,11 @@ class MockClient:
         self.calls.append(messages)
         blob = "\n".join(m.get("content") or "" for m in messages)
         recalled = _between(blob, "<recalled>", "</recalled>")
+        scratch = _between(blob, "<scratch>", "</scratch>")
         query = _last_user(messages)
+        # The clock reading travels in the compiled context, exactly where a real model
+        # would find it — see _now_from for why the mock must not read a clock itself.
+        now = _now_from(scratch)
 
         wants_write = _wants_write(query)
         if wants_write and tools and _has_tool(tools, "memory_write"):
@@ -263,10 +267,46 @@ class MockClient:
                 tool_calls=[ToolCall("memory_search", {"query": query})],
                 model=self.name, total_ms=_ms(t0, self.latency_ms),
             )
+        # ⭐ A clock question is answered from the injected reading, BEFORE the memory
+        # branch. The tool contract withholds memory_search for it, so falling through
+        # to "I don't have anything in memory" is truthful and useless — the user asked
+        # the time, not whether FRIDAY remembers it.
+        if now and _CLOCKY.search(query.lower()):
+            return Response(text=f"It's {now}.", model=self.name,
+                            total_ms=_ms(t0, self.latency_ms))
+
+        # "who are you" is answered from the IDENTITY slot, which is in the compiled
+        # context — SOUL.md is the stable prefix, so it is always there. Saying "I have
+        # no memory about that" when the answer is literally in the prompt is the mock
+        # failing to read its own context, which is the one thing it must model a real
+        # client doing.
+        if _META.search(query.strip().lower()):
+            ident = _between(blob, "<identity>", "</identity>").strip()
+            line = next((l.strip() for l in ident.splitlines()
+                         if l.strip() and not l.strip().startswith("#")), "")
+            return Response(
+                text=(f"{line[:200]}" if line else
+                      "I'm FRIDAY. Your memory is in Markdown you can read and edit."),
+                model=self.name, total_ms=_ms(t0, self.latency_ms))
+
+        # Arithmetic needs neither memory nor a model.
+        arith = _safe_arith(query)
+        if arith is not None:
+            return Response(text=f"{arith}", model=self.name,
+                            total_ms=_ms(t0, self.latency_ms))
+
+        # A greeting or an acknowledgement is not a question and needs no memory.
+        # Answering "hi" with "I don't have anything in memory about that" is the
+        # single fastest way to make an assistant feel like a database.
+        g = _SOCIAL.match(query.strip())
+        if g:
+            return Response(text=_social_reply(g.group(0)),
+                            model=self.name, total_ms=_ms(t0, self.latency_ms))
+
         if recalled.strip():
             facts = _facts_from(recalled)
             if facts:
-                return Response(text=_answer(query, facts), model=self.name,
+                return Response(text=_answer(query, facts, now=now), model=self.name,
                                 total_ms=_ms(t0, self.latency_ms))
         return Response(
             text=(
@@ -314,6 +354,10 @@ def _facts_from(recalled: str) -> list[tuple[str, str]]:
     return out
 
 
+_CLOCKY = re.compile(
+    r"\b(?:what(?:'s|\s+is)?\s+(?:the\s+)?(?:time|date|day)|what\s+time|today'?s\s+date"
+    r"|what\s+day\s+is|the\s+time\b|\bdate\b)\b", re.I
+)
 _ASK = re.compile(r"\b(what|which|who|where|when|how much|how many|is|are|do i|tell me)\b", re.I)
 _WRITE = re.compile(
     r"\b(?:my|i am|i'm|i live|i moved|i work|call me|remember that|i prefer|my name is)\b", re.I
@@ -350,8 +394,106 @@ def _has_tool(tools: list[dict], name: str) -> bool:
     return any((t.get("function", t).get("name") == name) for t in tools)
 
 
-def _answer(query: str, facts: list[tuple[str, str]]) -> str:
+_NOW_LINE = re.compile(r"^\[now\]\s*(.+)$", re.MULTILINE)
+
+
+def _now_from(scratch: str) -> str | None:
+    """Pull the injected clock reading back out of the context.
+
+    The mock reads it from the SAME place a real model would — the compiled context —
+    rather than calling datetime itself. That matters: if the mock had its own clock,
+    it would keep working when the injection broke, and the no-model path would stop
+    testing the thing it exists to test.
+    """
+    m = _NOW_LINE.search(scratch or "")
+    return m.group(1).strip() if m else None
+
+
+#: Greetings and acknowledgements, and what to say back. The mock is not a toy: it is
+#: the path that has to feel like an assistant before any model is downloaded, and
+#: "hi" -> "I don't have anything in memory about that" would make Phase 0 unusable to
+#: actually talk to, which is the one habit doc 10 says decides whether this ships.
+_SOCIAL = re.compile(
+    r"^(?:hi|hey|hello|yo|namaste|vanakkam|good\s+(?:morning|afternoon|evening|night)"
+    r"|thanks|thank\s+you|thx|ok|okay|k|sure|alright|got\s+it|makes\s+sense"
+    r"|bye|goodbye|see\s+you|how\s+are\s+you|what'?s\s+up)(?:[!.,\s]*(?:friday|there|da|mach|bro))?[\s!.,]*$",
+    re.IGNORECASE,
+)
+_SOCIAL_REPLY = {
+    "hi": "Hi. What do you need?",
+    "hey": "Hey. What's up?",
+    "hello": "Hello. I'm here.",
+    "namaste": "Namaste. What can I do for you?",
+    "vanakkam": "Vanakkam. What do you need?",
+    "thanks": "Any time.",
+    "thank you": "Any time.",
+    "ok": "Alright.",
+    "okay": "Alright.",
+    "bye": "Bye. I'll keep the memory warm.",
+    "how are you": "Running. Ask me something and I'll be more use.",
+}
+
+
+_META = re.compile(
+    r"^(?:who\s+are\s+you|what\s+are\s+you|what\s+is\s+your\s+name|what\s+can\s+you\s+do"
+    r"|help|commands?|are\s+you\s+(?:real|human|there)|what\s+model\s+are\s+you"
+    r"|how\s+do\s+you\s+work)(?:\??)[\s!.,]*$", re.IGNORECASE)
+
+# No exponentiation on purpose. `**` is right-associative and cheap to write but
+# unbounded to evaluate: 9**9**9 is a one-line denial of service against a laptop
+# that is also the user's only machine. Nobody asks a personal assistant for a power
+# tower, and the four arithmetic operators cover every realistic question.
+_ARITH_OK = re.compile(r"^[\s(]*[-+]?[\d.,]+(?:\s*[-+*/x×%]\s*[-+]?[\d.,]+\s*[)]*)+[\s?=]*$")
+
+
+def _safe_arith(query: str):
+    """Evaluate a plain arithmetic question, or return None.
+
+    ⚠️ Parsed with `ast` and walked to allow ONLY numbers and the five arithmetic
+    operators. `eval()` on a user string is how a personal agent with filesystem
+    access becomes a remote code execution hole, and the regex pre-check is not
+    sufficient on its own — it is defence in depth, not the defence.
+    """
+    import ast as _ast
+
+    q = (query or "").strip().rstrip("?=").strip()
+    low = q.lower()
+    for lead in ("what is", "what's", "calculate", "compute", "how much is"):
+        if low.startswith(lead):
+            q = q[len(lead):].strip()
+            break
+    if not q or not _ARITH_OK.match(q):
+        return None
+    expr = q.replace("x", "*").replace("×", "*").replace(",", "")
+    try:
+        tree = _ast.parse(expr, mode="eval")
+    except SyntaxError:
+        return None
+    allowed = (_ast.Expression, _ast.BinOp, _ast.UnaryOp, _ast.Constant,
+               _ast.Add, _ast.Sub, _ast.Mult, _ast.Div, _ast.FloorDiv, _ast.Mod)
+    for node in _ast.walk(tree):
+        if not isinstance(node, allowed):
+            return None
+        if isinstance(node, _ast.Constant) and not isinstance(node.value, (int, float)):
+            return None
+    try:
+        val = eval(compile(tree, "<arith>", "eval"), {"__builtins__": {}}, {})  # noqa: S307
+    except Exception:
+        return None
+    if isinstance(val, float):
+        return f"{val:,.2f}".rstrip("0").rstrip(".") if val != int(val) else f"{int(val):,}"
+    return f"{val:,}"
+
+
+def _social_reply(matched: str) -> str:
+    key = matched.lower().strip().rstrip("!.,")
+    return _SOCIAL_REPLY.get(key, "Noted.")
+
+
+def _answer(query: str, facts: list[tuple[str, str]], now: str | None = None) -> str:
     ql = query.lower()
+    if now and _CLOCKY.search(ql):
+        return f"It's {now}."
     # prefer a fact whose predicate shares a word with the question
     qwords = set(re.findall(r"[a-z]{3,}", ql))
     best = None

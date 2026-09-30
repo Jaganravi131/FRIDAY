@@ -50,7 +50,7 @@ def test_parser_covers_every_documented_subcommand():
     sub = next(a for a in ap._actions if hasattr(a, "choices") and a.dest == "cmd")
     have = set(sub.choices)
     expected = {
-        "build", "rebuild", "seed", "ask", "chat", "write", "search",
+        "build", "rebuild", "seed", "ask", "chat", "write", "search", "why",
         "history", "timecheck", "status", "audit", "export", "ablation", "needle",
     }
     assert expected <= have, f"missing: {sorted(expected - have)}"
@@ -72,7 +72,8 @@ def _required_args(name):
     """Minimal positional args so the parser reaches set_defaults."""
     return {
         "ask": ["hello"], "chat": [], "write": ["mood", "fine"],
-        "search": ["rent"], "history": ["mood"], "timecheck": ["2026-01-01"],
+        "search": ["rent"], "why": [], "history": ["mood"],
+        "timecheck": ["2026-01-01"],
     }.get(name, [])
 
 

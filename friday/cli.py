@@ -9,6 +9,7 @@ Subcommands:
     chat       a REPL session
     write      record a fact from the shell
     search     query memory directly, showing scores and the floor
+    why        ⭐ the literal source quotes + trace ids behind an answer
     history    the bi-temporal trail for one predicate
     status     RAM/DB/supervision readiness at a glance
     ablation   the RSC ladder
@@ -29,10 +30,12 @@ import sys
 from pathlib import Path
 
 from . import paths
+from .util import now_iso
 from .config import LEDGER_BUDGET_TOKENS, RETRIEVAL_K_SHIP, canonical_predicate
 from .ledger.compiler import Gather, Ledger
 from .llm.client import get_client
 from .memory import compiler as mcompiler
+from .memory import provenance, watcher as memory_watcher
 from .memory.facts import Fact, assert_fact, beliefs_at, facts_at, history_of
 from .memory.supervision import export_training_set, ready_for_phase_3_5, supervision_report
 from .memory.traces import TraceWriter, behavioural_signals
@@ -150,10 +153,19 @@ def cmd_ask(args) -> int:
     agent = _agent(conn, args)
     st = agent.run(args.question, senses=args.senses.split(",") if args.senses else [])
 
+    if st.memory_sync is not None and st.memory_sync.changed:
+        # ⭐ Law 7, made visible. You edited a file and FRIDAY noticed — saying so is
+        # what turns "did it pick that up?" from a question into a fact.
+        _say(f"⟳ memory: {st.memory_sync.summary()}")
     if not args.quiet and st.compiled is not None:
         _say(st.compiled.printout(turn=st.turn_idx))
         _say("")
     _say(st.final_text)
+    if st.intent is not None and not args.quiet:
+        _say(f"\n[turn: {st.intent.kind} · memory="
+             f"{'used' if st.intent.needs_memory else 'skipped'} · {st.intent.reason}]")
+    if st.retrieved and not args.quiet:
+        _say("[type `friday why` or \\why for the source quotes behind this]")
     if st.tool_log and args.verbose:
         _say("\ntool calls:")
         for t in st.tool_log:
@@ -170,9 +182,12 @@ def cmd_chat(args) -> int:
     senses = args.senses.split(",") if args.senses else []
     _say(f"FRIDAY — {agent.client.name} · ctx={args.ctx} · "
          f"{'hybrid' if not args.transformer_backbone else 'transformer'} backbone")
-    _say("Type your message. Ctrl-D or 'exit' to quit. '\\ledger' toggles the printout.\n")
+    _say("Type your message. Ctrl-D or 'exit' to quit.")
+    _say("  \\why sources behind the last answer · \\ledger toggle printout · \\status\n")
     show_ledger = not args.quiet
     session = ""
+    last_query = last_answer = None
+    last_retrieved = None
     while True:
         try:
             line = input("you> ").strip()
@@ -190,11 +205,24 @@ def cmd_chat(args) -> int:
         if line == "\\status":
             _status(conn)
             continue
+        if line in ("\\why", "/why"):
+            # Exit test #3: the literal source quote + trace id behind the last answer.
+            if last_retrieved is None:
+                _say("nothing to explain yet — ask me something first.")
+                continue
+            _say(provenance.render_report(
+                provenance.from_candidates(last_retrieved),
+                query=last_query or "", answer=last_answer or ""))
+            continue
         st = agent.run(line, session_id=session, senses=senses)
         session = st.session_id
+        last_query, last_answer, last_retrieved = line, st.final_text, st.retrieved
+        if st.memory_sync is not None and st.memory_sync.changed:
+            _say(f"⟳ memory: {st.memory_sync.summary()}")
         if show_ledger and st.compiled is not None:
             _say(st.compiled.printout(turn=st.turn_idx))
-        _say(f"\nfriday> {st.final_text}\n")
+        _say(f"\nfriday> {st.final_text}")
+        _say("[\\why for sources · \\ledger · \\status · exit]\n")
 
 
 # ── memory commands ────────────────────────────────────────────────────────────
@@ -270,6 +298,49 @@ def cmd_search(args) -> int:
     return 0
 
 
+def cmd_why(args) -> int:
+    """Exit test #3: show the literal source quote + trace id behind an answer.
+
+    With a query, it shows what that question WOULD retrieve and why. With `--last`
+    it explains the most recent turn in this DB. Without either, it explains the
+    facts currently in context (the auto-injected core memory), which is the honest
+    answer to "why do you believe what you believe right now?".
+    """
+    paths.ensure_layout()
+    conn = _conn(args)
+    if args.query:
+        _say(provenance.why_query(conn, args.query, embedder=get_embedder(),
+                                  reranker=get_reranker(), k=args.k))
+        return 0
+
+    if args.last:
+        row = conn.execute(
+            """SELECT t.content AS q, s.content AS a, s.session_id
+               FROM turns t JOIN turns s
+                 ON s.session_id = t.session_id AND s.turn_idx = t.turn_idx
+               WHERE t.role='user' AND s.role='assistant'
+               ORDER BY t.id DESC LIMIT 1"""
+        ).fetchone()
+        if row is None:
+            _say("no recorded turn yet — ask something first, then run `friday why --last`.")
+            return 0
+        _say(f"last turn: {row['q']!r}")
+        _say(f"answered:  {str(row['a'])[:200]}")
+        _say("")
+        _say(provenance.why_query(conn, row["q"], embedder=get_embedder(),
+                                  reranker=get_reranker(), k=args.k))
+        return 0
+
+    # No query: explain what is auto-injected right now.
+    rows = conn.execute(
+        """SELECT * FROM facts WHERE retracted_at IS NULL
+           ORDER BY confidence DESC, access_count DESC LIMIT ?""", (args.k,)
+    ).fetchall()
+    provs = [provenance.from_row(r) for r in rows]
+    _say(provenance.render_report(provs, query="(core memory currently in context)"))
+    return 0
+
+
 def cmd_history(args) -> int:
     conn = _conn(args)
     rows = history_of(conn, args.predicate)
@@ -339,12 +410,21 @@ def cmd_status(args) -> int:
 
 def cmd_audit(args) -> int:
     conn = _conn(args)
-    rows = conn.execute(
-        "SELECT ts, actor, action, target, sense_id, decision FROM audit ORDER BY id DESC LIMIT ?",
-        (args.limit,),
-    ).fetchall()
+    q = "SELECT ts, actor, action, target, sense_id, decision FROM audit"
+    a: list = []
+    if args.today:
+        # Exit test #9: `friday audit --today` — every tool call, decision and denial
+        # for the day, including your own hand-edits. Scoping by day is what makes the
+        # trail readable; an unbounded dump is how an audit log stops being read.
+        day = args.day or now_iso()[:10]
+        q += " WHERE ts LIKE ?"
+        a.append(day + "%")
+    q += " ORDER BY id DESC LIMIT ?"
+    a.append(args.limit)
+    rows = conn.execute(q, a).fetchall()
     if not rows:
-        _say("audit is empty — nothing has been enforced yet.")
+        scope = f" for {args.day or now_iso()[:10]}" if args.today else ""
+        _say(f"audit is empty{scope} — nothing has been enforced yet.")
         return 0
     _say(_rich_table([[r["ts"][11:19], r["actor"], r["action"], (r["target"] or "")[:36],
                        r["sense_id"] or "-", r["decision"]] for r in rows],
@@ -446,6 +526,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query"); p.add_argument("--as-of", default=None)
     p.add_argument("--k", type=int, default=RETRIEVAL_K_SHIP)
 
+    p = sub.add_parser("why", help="⭐ the literal sources behind an answer"); common(p)
+    p.set_defaults(fn=cmd_why)
+    p.add_argument("query", nargs="?", default=None,
+                   help="explain what this question would retrieve")
+    p.add_argument("--last", action="store_true", help="explain the most recent turn")
+    p.add_argument("--k", type=int, default=RETRIEVAL_K_SHIP)
+
     p = sub.add_parser("history", help="bi-temporal trail for one predicate"); common(p)
     p.set_defaults(fn=cmd_history); p.add_argument("predicate")
 
@@ -457,6 +544,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("audit", help="the enforcement trail"); common(p)
     p.set_defaults(fn=cmd_audit); p.add_argument("--limit", type=int, default=30)
+    p.add_argument("--today", action="store_true", help="only today's entries")
+    p.add_argument("--day", default=None, help="YYYY-MM-DD, implies --today")
 
     p = sub.add_parser("export", help="dump RSC supervision to JSONL for Kaggle"); common(p)
     p.set_defaults(fn=cmd_export); p.add_argument("--out", default="artifacts/rsc_supervision.jsonl")

@@ -80,17 +80,28 @@ class SearchResult:
                 r = c.row
                 d.update(
                     {
-                        "subject": r["subject"],
-                        "predicate": r["predicate"],
-                        "object": r["object"],
-                        "valid_from": r["valid_from"],
-                        "valid_to": r["valid_to"],
-                        "asserted_at": r["asserted_at"],
-                        "retracted_at": r["retracted_at"],
-                        "confidence": round(float(r["confidence"]), 3),
-                        "source_kind": r["source_kind"],
-                        "source_quote": r["source_quote"],
-                        "origin_file": r["origin_file"],
+                        "subject": _cell(r, "subject"),
+                        "predicate": _cell(r, "predicate"),
+                        "object": _cell(r, "object"),
+                        "valid_from": _cell(r, "valid_from"),
+                        "valid_to": _cell(r, "valid_to"),
+                        "asserted_at": _cell(r, "asserted_at"),
+                        "retracted_at": _cell(r, "retracted_at"),
+                        "confidence": round(float(_cell(r, "confidence", 0.5) or 0.5), 3),
+                        "source_kind": _cell(r, "source_kind"),
+                        "source_quote": _cell(r, "source_quote"),
+                        "origin_file": _cell(r, "origin_file"),
+                        # ⭐ The rest of the paper trail. Exit test #3 requires the
+                        # literal quote AND the trace id, and `/why` needs the line
+                        # number to point at a place in a file you can open. These
+                        # were missing, so a personal answer could show its quote but
+                        # not the conversation it came from — enough to look
+                        # justified without being traceable.
+                        "id": _cell(r, "id", c.ref),
+                        "trace_id": _cell(r, "trace_id"),
+                        "origin_line": _cell(r, "origin_line"),
+                        "superseded_by": _cell(r, "superseded_by"),
+                        "recall_sources": list(c.recall_sources),
                     }
                 )
             else:
@@ -145,6 +156,24 @@ def rewrite_query(query: str, recent_turns: Sequence[str] = ()) -> str:
 _STOP = {"the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "do",
          "does", "did", "my", "your", "me", "i", "of", "to", "in", "on", "for", "and",
          "or", "it", "that", "this", "about", "tell", "know", "remember"}
+
+
+def _cell(row: Any, key: str, default: Any = None) -> Any:
+    """Read one column from a facts row, tolerating a row that lacks it.
+
+    Handles both `sqlite3.Row` and a plain dict. `Candidate.row` is typed `Any` and
+    the pipeline always fills it from `SELECT *`, so in practice every column is
+    present — but `as_dicts` is a REPORTING path (it feeds the model's tool result and
+    `/why`), and a reporting path that raises KeyError on a partial row turns "show me
+    what you found" into a traceback. `provenance.from_row` already degrades to
+    "unknown" for exactly this reason; the two must agree, or the first one to touch a
+    projection decides whether the command works.
+    """
+    try:
+        v = row[key]
+        return default if v is None else v
+    except (KeyError, IndexError, TypeError):
+        return default
 
 
 def _content_words(text: str) -> list[str]:
