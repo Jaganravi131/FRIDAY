@@ -68,6 +68,13 @@ INDEX_HTML = """<!doctype html>
         justify-content:space-between;align-items:center;gap:12px}
  header b{font-size:15px;letter-spacing:.14em}
  #state{font-size:11px;color:#7d8590}
+ #bar{max-width:820px;margin:0 auto;padding:14px 18px 0;display:flex;gap:8px;
+      align-items:center;flex-wrap:wrap}
+ #bar span{color:#7d8590;font-size:12px}
+ #bar input{flex:1;min-width:180px;background:#161b22;border:1px solid #30363d;
+      border-radius:6px;color:#e6edf3;padding:7px;font:inherit;font-size:12px}
+ #bar button{background:#30363d;border:0;border-radius:6px;color:#e6edf3;
+      padding:7px 14px;font:inherit;font-size:12px;cursor:pointer}
  main{max-width:820px;margin:0 auto;padding:18px}
  .turn{margin:0 0 18px}
  .u{color:#79c0ff;white-space:pre-wrap}
@@ -85,25 +92,57 @@ INDEX_HTML = """<!doctype html>
  button[type=submit]:disabled{opacity:.5;cursor:progress}
 </style></head><body>
 <header><b>FRIDAY</b><span id="state">connecting…</span></header>
+<div id="bar" hidden><span>token</span><input id="tk" type="password"
+  placeholder="paste from config/serve.token"><button id="go">connect</button></div>
 <main id="log"></main>
 <form id="f"><input id="q" autocomplete="off" autofocus
   placeholder="ask, or tell it something to remember"><button type="submit">send</button></form>
 <script>
 const log=document.getElementById('log'),f=document.getElementById('f'),
-      q=document.getElementById('q'),st=document.getElementById('state');
-let token=localStorage.getItem('friday.token')||'';
-if(!token){token=prompt('FRIDAY serve token (in config/serve.token)')||'';
-           localStorage.setItem('friday.token',token);}
+      q=document.getElementById('q'),st=document.getElementById('state'),
+      bar=document.getElementById('bar'),tk=document.getElementById('tk');
+
+/* ⚠️ No prompt(), and no bare localStorage.
+   This page is opened inside a proxied iframe (the Arena preview) as often as in a
+   browser tab. A sandboxed iframe BLOCKS modal dialogs — prompt() silently returns
+   null — and touching localStorage on an opaque origin THROWS SecurityError. Either
+   one killed the page before the form handler was attached, so the UI rendered and
+   then did nothing at all, with no error visible. Token comes from the URL fragment,
+   then storage (guarded), then an inline field that works anywhere. */
+const store={
+  get(k){try{return localStorage.getItem(k)}catch(e){return null}},
+  set(k,v){try{localStorage.setItem(k,v)}catch(e){}}
+};
+let token=new URLSearchParams(location.hash.slice(1)).get('token')
+        || store.get('friday.token') || '';
+if(token) store.set('friday.token',token);
+
+function needToken(msg){
+  st.textContent=msg; bar.hidden=false; tk.value=''; tk.focus();
+}
+document.getElementById('go').onclick=()=>{
+  token=tk.value.trim(); if(!token)return;
+  store.set('friday.token',token); bar.hidden=true; ping();
+};
+tk.onkeydown=e=>{if(e.key==='Enter')document.getElementById('go').click()};
+
 async function call(path,body){
   const r=await fetch(path,{method:body?'POST':'GET',
     headers:{'content-type':'application/json','authorization':'Bearer '+token},
     body:body?JSON.stringify(body):undefined});
-  if(r.status===401){st.textContent='bad token — reload to re-enter';throw new Error('401')}
+  if(r.status===401){needToken('token rejected — paste it again');throw new Error('401')}
   return r.json();
 }
 function el(cls,txt){const d=document.createElement('div');d.className=cls;
   d.textContent=txt;return d;}
-call('/health').then(h=>st.textContent=h.ready?'ready · '+h.model:'degraded');
+async function ping(){
+  try{
+    const h=await call('/health');
+    st.textContent=h.ready?'ready · '+h.model
+                           :'degraded · '+h.model+' (no model server — see INSTALL.md §3)';
+  }catch(e){/* needToken already explained it */}
+}
+token?ping():needToken('paste your serve token to connect');
 f.onsubmit=async e=>{
   e.preventDefault();const text=q.value.trim();if(!text)return;
   q.value='';const t=document.createElement('div');t.className='turn';
@@ -118,7 +157,7 @@ f.onsubmit=async e=>{
     b.onclick=async()=>{const w=await call('/api/why',{question:text});
       t.appendChild(el('meta',w.report||'(no provenance)'));b.remove();};
     t.appendChild(b);
-  }catch(err){t.appendChild(el('warn','error: '+err.message));}
+  }catch(err){if(err.message!=='401')t.appendChild(el('warn','error: '+err.message));}
   btn.disabled=false;q.focus();log.scrollIntoView(false);
 };
 </script></body></html>
@@ -381,7 +420,12 @@ def serve(*, host: str = "127.0.0.1", port: int = DEFAULT_PORT,
         print(f"  token      {tok_path or '(passed inline)'}"
               + ("   ← newly created, 0600" if created else ""))
         print(f"  token value {tok}")
-        print(f"  web UI     http://{bind}:{port}/")
+        shown = "127.0.0.1" if bind == "0.0.0.0" else bind
+        print(f"  web UI     http://{shown}:{port}/")
+        # The fragment never reaches the server, so this is safe to bookmark and it
+        # skips typing the token — and it is the only route that works where a modal
+        # prompt would not.
+        print(f"  no typing  http://{shown}:{port}/#{tok[:0]}token={tok}")
         print(f"  OpenAI API http://{bind}:{port}/v1/chat/completions")
         print(f"  health     http://{bind}:{port}/health   (no token)")
         if bind == "0.0.0.0":

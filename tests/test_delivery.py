@@ -255,6 +255,35 @@ def test_index_html_has_no_external_dependencies():
     assert "<style>" in html and "<script>" in html      # inline, self-contained
 
 
+def test_index_html_survives_a_sandboxed_iframe():
+    """⭐ The page is opened inside a proxied iframe as often as in a browser tab.
+
+    Two bugs of this class were shipped and neither is visible by looking at the page:
+
+      * `prompt()` is BLOCKED in a sandboxed iframe — it returns null silently, so the
+        token was always empty and every request 401'd.
+      * touching `localStorage` on an opaque origin THROWS SecurityError, which killed
+        the script before `f.onsubmit` was assigned. The UI rendered perfectly and then
+        did nothing at all, with no error anywhere.
+
+    A preview that looks fine and cannot be used is worse than one that fails loudly,
+    because there is nothing to debug. So: no modal dialogs, storage access guarded,
+    and an inline field that works in any embedding context.
+    """
+    html = serve.INDEX_HTML
+    # strip the explanatory comment before looking for calls — the words appear in it
+    code = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    assert not re.search(r"(?:^|[^\w.])prompt\s*\(", code, re.M), "modal dialog in an iframe"
+    assert not re.search(r"(?:^|[^\w.])alert\s*\(", code, re.M)
+    assert not re.search(r"(?:^|[^\w.])confirm\s*\(", code, re.M)
+    # every localStorage touch must be inside a try
+    assert "try{return localStorage" in html and "try{localStorage.setItem" in html
+    assert not re.search(r"^\s*(?:let|const|var)?\s*\w*\s*=?\s*localStorage\.", code, re.M)
+    # and there must be a route in that does not depend on JS at all
+    assert 'id="bar"' in html, "no inline token field"
+    assert "URLSearchParams(location.hash" in html, "cannot accept a token from the URL"
+
+
 @pytest.fixture
 def gateway(tmp_path):
     """A real server on a real port. A gateway tested only by import is not tested.
