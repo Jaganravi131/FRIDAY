@@ -177,6 +177,67 @@ def test_model_server_probe_finds_a_listener(monkeypatch):
     assert f.status == "ok" and "llama.cpp" in f.detail
 
 
+# ── GPU / Vulkan detection ─────────────────────────────────────────────────────
+# The original check was `has_cuda()` alone, which on the real target machine — a
+# Ryzen 5 with a Radeon iGPU — reported "no CUDA. Expected." and stopped. That cost a
+# 10x larger model, because llama.cpp's Vulkan backend runs on AMD iGPUs on Windows
+# with no ROCm. So the four cases are pinned explicitly.
+
+def _gpu(rep, monkeypatch, info):
+    monkeypatch.setattr(doctor, "gpu_info", lambda: info)
+    doctor.check_runtime(rep)
+    return next(f for f in rep.findings if f.name == "GPU")
+
+
+def test_amd_igpu_with_vulkan_is_an_ok_not_a_skip(monkeypatch):
+    """⭐ The case the target machine actually is."""
+    rep = doctor.Report()
+    f = _gpu(rep, monkeypatch, {"names": ["AMD Radeon(TM) Graphics"], "cuda": False,
+                                "vulkan_loader": True, "amd": True, "intel": False})
+    assert f.status == "ok"
+    assert "Vulkan" in f.fix and "ROCm" in f.fix
+    assert "14B" in f.fix                      # names the real ceiling, not 1.2B
+    assert "vulkan" in f.fix.lower()           # and warns it needs the vulkan build
+    assert not rep.failed
+
+
+def test_gpu_without_a_vulkan_loader_warns_to_update_the_driver(monkeypatch):
+    rep = doctor.Report()
+    f = _gpu(rep, monkeypatch, {"names": ["AMD Radeon(TM) Graphics"], "cuda": False,
+                                "vulkan_loader": False, "amd": True, "intel": False})
+    assert f.status == "warn"
+    assert "driver" in f.fix and "1.2B" in f.fix     # falls back to the CPU ceiling
+
+
+def test_cuda_wins_over_the_vulkan_path(monkeypatch):
+    rep = doctor.Report()
+    f = _gpu(rep, monkeypatch, {"names": ["NVIDIA GeForce RTX 4060"], "cuda": True,
+                                "vulkan_loader": True, "amd": False, "intel": False})
+    assert f.status == "ok" and "CUDA" in f.detail
+
+
+def test_no_gpu_at_all_is_a_skip_with_cpu_advice(monkeypatch):
+    rep = doctor.Report()
+    f = _gpu(rep, monkeypatch, {"names": [], "cuda": False, "vulkan_loader": False,
+                                "amd": False, "intel": False})
+    assert f.status == "skip" and "CPU-only" in f.detail
+    assert not rep.failed
+
+
+def test_gpu_info_never_raises_on_an_unusable_platform(monkeypatch):
+    """Identification is best-effort; a failed probe must not take the doctor with it."""
+    def boom(*a, **k):
+        raise OSError("no subprocess here")
+
+    # gpu_info imports subprocess INSIDE the function, so patch the module globally —
+    # `doctor.subprocess` does not exist as an attribute.
+    monkeypatch.setattr("subprocess.run", boom)
+    monkeypatch.setattr(doctor, "has_cuda", lambda: False)
+    g = doctor.gpu_info()
+    assert isinstance(g["names"], list) and g["cuda"] is False
+    assert "vulkan_loader" in g and "amd" in g
+
+
 def test_doctor_runs_end_to_end_on_an_empty_root(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
     rep = doctor.run(root=tmp_path)

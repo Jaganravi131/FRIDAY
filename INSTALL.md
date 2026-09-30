@@ -16,7 +16,7 @@ what is wrong with *your* machine rather than describing mine.
 | Python **3.11 or newer** | The codebase uses 3.10+ syntax throughout | `python --version` |
 | ~4 GB free disk | One quantized model plus headroom | `friday doctor` |
 | 16 GB RAM | Already what you have — this is the design target | `friday doctor` |
-| No GPU required | Decode runs on the CPU; the iGPU is not used | — |
+| No CUDA required | Your **Radeon iGPU still accelerates** via Vulkan — see §3 | `friday doctor` |
 | No internet after setup | Everything is local by design | — |
 
 Install Python from [python.org](https://www.python.org/downloads/windows/) and **tick
@@ -93,31 +93,67 @@ $env:FRIDAY_LLM_KEY   = "ollama"    # Ollama ignores it; the client requires a v
 python -m friday doctor              # "Model server: reachable" and "ready"
 ```
 
-### Option B — llama.cpp with an edge-tuned model (better on this hardware)
+### Option B — llama.cpp with the **Vulkan** backend (⭐ do this, not the CPU build)
 
-LFM2.5-1.2B is built for exactly this class of machine and has first-class llama.cpp
-support:
+> **Correction.** An earlier version of this file said the iGPU was not used and
+> recommended staying at 1.2B–3B. That was CPU-only arithmetic and it was wrong.
+> llama.cpp has a mature **Vulkan** backend that runs on AMD and Intel iGPUs **on
+> Windows, with no ROCm and no extra drivers** — the Vulkan loader ships with every AMD
+> graphics driver. Field reports put a 26B Q4 model at ~25 tok/s on a Radeon 780M that
+> way, roughly a 5–6× uplift over the CPU path. `friday doctor` now detects this and
+> tells you which case your machine is.
+
+Download the **vulkan** Windows release, not the cpu one:
 
 ```powershell
-# download a llama.cpp Windows CPU release from
-#   https://github.com/ggml-org/llama.cpp/releases   ->  llama-<ver>-bin-win-cpu-x64.zip
+# https://github.com/ggml-org/llama.cpp/releases
+#   ->  llama-<ver>-bin-win-vulkan-x64.zip        ← vulkan, NOT -cpu-x64
 # unzip somewhere stable, e.g. C:\tools\llama.cpp
-C:\tools\llama.cpp\llama-server.exe -hf liquid-ai/LFM2.5-1.2B-GGUF -c 4096 --port 8080
+
+C:\tools\llama.cpp\llama-server.exe `
+  -hf Qwen/Qwen3-14B-GGUF `
+  --n-gpu-layers 999 `        # offload everything to the iGPU
+  -c 8192 --port 8080
 
 $env:FRIDAY_LLM_URL   = "http://127.0.0.1:8080/v1"
-$env:FRIDAY_LLM_MODEL = "liquid-ai/LFM2.5-1.2B-GGUF"
+$env:FRIDAY_LLM_MODEL = "Qwen/Qwen3-14B-GGUF"
 ```
 
-### Which model, and why not a bigger one
+Confirm Vulkan actually engaged — the startup log must contain a `ggml_vulkan: Found 1
+Vulkan devices` line naming your Radeon. If it says `ggml_cpu` instead, you downloaded
+the CPU build.
 
-Stay in the **1.2B–3B Q4** range. The reasoning is in `docs/architecture/05`, and the
-short version is arithmetic: a 7B Q4 needs ~5 GB just to load and leaves little for the
-KV cache, your browser, and Windows. On a Radeon iGPU with no CUDA you are decoding on
-the CPU, where a 1.2B model is usable and a 7B model is not.
+### Which model, and why the ceiling is higher than you'd guess
 
-**Do not plan around Qwen3-30B-A3B on 16 GB.** It does not fit with anything else
-running, and "it almost fits" is worse than "it definitely fits" because it fails under
-load rather than at startup.
+An iGPU has no dedicated VRAM — it shares your system RAM. On 16 GB, Windows and your
+browser take ~4–5 GB, which leaves **~10–11 GB** for a model plus its KV cache. At
+Q4_K_M that means:
+
+| Model | Size at Q4_K_M | Verdict on 16 GB + Vulkan |
+|---|---|---|
+| **Qwen3 14B** | ~8.5 GB | The ceiling. Works, but close other tabs. Apache 2.0 |
+| **Gemma 3 12B** | ~6.7 GB | ⭐ **The daily driver** — real headroom, strong all-round |
+| **gpt-oss-20b** | ~11 GB (MoE, 3.6B active) | Excellent reasoning, fast because few params are active; tight fit |
+| **Qwen3 8B** | ~5.0 GB | Comfortable; spend the savings on a longer context |
+| Qwen3 4B / LFM2.5-1.2B | 2.6 / 0.8 GB | Only if you want an always-on background model |
+
+**Use Q4_K_M.** Q3_K_M and below show measurable degradation, and Q8 does not fit at
+these sizes. **Do not plan around Qwen3-30B-A3B** — ~18 GB at Q4, it does not fit, and
+"it almost fits" is worse than "it definitely fits" because it fails under load rather
+than at startup.
+
+### Why Vulkan matters *more* to FRIDAY than to a normal chat app
+
+Generation speed is the number people quote, but FRIDAY is **prefill-heavy**: every
+single turn re-prefills the ledger block — identity, senses, user, core memory, the
+recalled slots. On a CPU that prefill runs at roughly 45–50 tok/s; on an iGPU via
+Vulkan it runs at **200–285 tok/s**. So the Vulkan win lands squarely on the part of
+the workload FRIDAY actually spends its time in, and it compounds with the
+byte-stable prefix the Attention Ledger enforces (doc 05): a stable prefix is what lets
+llama.cpp's prompt cache skip that prefill entirely on follow-up turns.
+
+That combination — a 12B model, a 5× faster prefill, and a prefix that caches — is
+worth more to this project than any model swap, and it costs nothing.
 
 What FRIDAY gives up in raw model size, it is designed to win back in context
 discipline: the Attention Ledger keeps the prompt small and byte-stable (so the
@@ -251,7 +287,9 @@ Run both by hand before calling Phase 0 done.
 | `doctor` says Python 3.9 | Microsoft Store alias | `python.org` install, or `py -3.12` |
 | Answers are `"lease amount monthly: ₹28,000"`-shaped and never vary | Mock client | No model server running — §3 |
 | `Model server: nothing listening` | Ollama/llama.cpp not started | Start it, then `friday doctor` |
-| Model loads then the machine crawls | Model too big for 16 GB | Drop to 1.2B–1.5B Q4 |
+| Model loads then the machine crawls | Model too big for 16 GB | Drop to Gemma 3 12B, then Qwen3 8B |
+| Log says `ggml_cpu`, not `ggml_vulkan` | Downloaded the CPU build | Get `llama-*-bin-win-vulkan-x64.zip` |
+| Slow first token, fast after | Prefill on the CPU | `--n-gpu-layers 999`; check the Vulkan log line |
 | `CHECK constraint failed: scope` | Database predates the `remote` scope | `python -m friday rebuild` |
 | Every turn prints `⟳ memory: soul edited` | Fixed; if you see it, update | `git pull` — cold caches no longer report edits |
 | `audit --today` is empty | Fixed; if you see it, update | `git pull` — allows are logged now |

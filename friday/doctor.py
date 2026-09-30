@@ -25,6 +25,7 @@ Design rules:
 
 from __future__ import annotations
 
+import json
 import os
 import platform
 import shutil
@@ -153,6 +154,69 @@ def has_cuda() -> bool:
     return shutil.which("nvidia-smi") is not None
 
 
+#: DLLs / shared objects whose presence means a Vulkan loader is installed. AMD and
+#: Intel ship these with every graphics driver on Windows, which is why the Vulkan path
+#: needs no extra install — and why "no CUDA" does NOT mean "no GPU acceleration".
+_VULKAN_LOADER = (
+    r"C:\Windows\System32\vulkan-1.dll",
+    r"C:\Windows\SysWOW64\vulkan-1.dll",
+    "/usr/lib/x86_64-linux-gnu/libvulkan.so.1",
+    "/usr/lib64/libvulkan.so.1",
+)
+
+
+def gpu_info() -> dict:
+    """Best-effort GPU identification. Stdlib only, Windows-first.
+
+    ⚠️ This used to be `has_cuda()` alone, which on the actual target machine — a Ryzen
+    5 with a Radeon iGPU — reported "no CUDA, expected" and stopped. That was not
+    merely incomplete, it was actively misleading: llama.cpp's Vulkan backend runs on
+    AMD iGPUs on Windows with no ROCm and no extra drivers, and field reports put a 26B
+    Q4 model at ~25 tok/s on a Radeon 780M that way. Telling the user their iGPU was
+    irrelevant cost them roughly a 10x larger model.
+    """
+    import subprocess
+
+    names: list[str] = []
+    system = platform.system()
+    try:
+        if system == "Windows":
+            # `wmic` is removed in Windows 11 24H2+, so go through PowerShell CIM.
+            out = subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+                 "(Get-CimInstance Win32_VideoController).Name"],
+                capture_output=True, text=True, timeout=15)
+            names = [ln.strip() for ln in out.stdout.splitlines() if ln.strip()]
+        elif system == "Linux":
+            for card in sorted(Path("/sys/class/drm").glob("card*/device/vendor")) \
+                    if Path("/sys/class/drm").exists() else []:
+                vend = card.read_text().strip()
+                names.append({"0x1002": "AMD/ATI", "0x8086": "Intel",
+                              "0x10de": "NVIDIA"}.get(vend, f"vendor {vend}"))
+            if not names and shutil.which("lspci"):
+                out = subprocess.run(["lspci"], capture_output=True, text=True, timeout=15)
+                names = [ln.split(":", 2)[-1].strip() for ln in out.stdout.splitlines()
+                         if "VGA" in ln or "3D controller" in ln]
+        elif system == "Darwin":
+            out = subprocess.run(
+                ["system_profiler", "SPDisplaysDataType", "-json"],
+                capture_output=True, text=True, timeout=20)
+            for g in json.loads(out.stdout or "{}").get("SPDisplaysDataType", []):
+                names.append(g.get("sppci_model", "Apple GPU"))
+    except Exception:
+        pass                                   # identification is best-effort, never fatal
+
+    blob = " ".join(names).lower()
+    return {
+        "names": names,
+        "cuda": has_cuda(),
+        "vulkan_loader": any(Path(p).exists() for p in _VULKAN_LOADER)
+                         or shutil.which("vulkaninfo") is not None,
+        "amd": any(k in blob for k in ("radeon", "amd", "ati")),
+        "intel": "intel" in blob or "arc" in blob,
+    }
+
+
 def _probe(url: str, timeout: float = 1.5) -> str | None:
     """GET a URL with the stdlib. Returns the body, or None if unreachable."""
     import urllib.error
@@ -207,12 +271,27 @@ def check_runtime(rep: Report) -> None:
                 "This is likely a container limit rather than the real machine — check "
                 "with your OS. On real hardware this low, Python itself will struggle.")
 
-    if has_cuda():
-        rep.add("GPU", "ok", "nvidia-smi present — CUDA available")
+    g = gpu_info()
+    label = ", ".join(dict.fromkeys(g["names"])) or "none identified"
+    if g["cuda"]:
+        rep.add("GPU", "ok", f"{label} — CUDA available")
+    elif g["vulkan_loader"] and (g["amd"] or g["intel"]):
+        # ⭐ The case this machine actually is. Not a skip, and not a consolation.
+        rep.add("GPU", "ok",
+                f"{label} — no CUDA, but a Vulkan loader is present",
+                "Use llama.cpp's Vulkan backend (`--n-gpu-layers 999`): it runs on AMD "
+                "and Intel iGPUs on Windows with no ROCm and no extra drivers. This "
+                "raises your realistic ceiling from a 1.2B model to roughly Qwen3 14B "
+                "Q4 (~8.5 GB) or Gemma 3 12B (~6.7 GB). See INSTALL.md §3 — and note "
+                "that Vulkan needs the llama.cpp *vulkan* build, not the cpu build.")
+    elif g["names"]:
+        rep.add("GPU", "warn", f"{label} — but no Vulkan loader found",
+                "Update your graphics driver; AMD and Intel ship the Vulkan loader with "
+                "it. Without it you are CPU-only and should stay at 1.2B–3B Q4.")
     else:
         rep.add("GPU", "skip",
-                "no CUDA. Expected: the design target is CPU + integrated graphics, "
-                "and local fine-tuning is not part of the plan.")
+                "no GPU identified. CPU-only: stay at 1.2B–3B Q4. Local fine-tuning is "
+                "not part of the plan either way — free Kaggle T4 hours cover it.")
 
 
 def check_disk(rep: Report, root: Path) -> None:
