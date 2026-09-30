@@ -61,6 +61,27 @@ That single idea makes FRIDAY context-aware, self-improving, and a genuine resea
 
 ---
 
+## 🚀 Run it on your own machine
+
+**[INSTALL.md](INSTALL.md)** — Windows 11 / 16 GB / ₹0, step by step.
+
+```powershell
+pip install pytest pytest-subtests     # the entire dependency list
+python -m friday doctor                # will it run HERE? every problem, with a fix
+python -m friday seed && python -m friday build
+python -m friday ask "what is my monthly rent"
+python -m friday serve --host tailscale   # then open it on your phone
+```
+
+`doctor` is the first command to learn. It checks Python, SQLite, RAM, disk, the memory
+layout, the derived index, whether a model server is reachable, Tailscale, whether any
+credential leaked into your Markdown, and whether your memory has an off-disk backup —
+and prints the fix for each thing it finds. It exits nonzero on anything blocking, so it
+works in CI and in a cron job on the laptop.
+
+Everything else: `python -m friday --help`, and the subcommand list at the top of
+[`friday/cli.py`](friday/cli.py).
+
 ## 📐 The Blueprint
 
 **Status: architecture complete, implementation not started.**

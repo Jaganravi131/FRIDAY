@@ -99,7 +99,15 @@ CREATE TABLE IF NOT EXISTS sessions (
   id           TEXT PRIMARY KEY,
   started_at   TEXT NOT NULL,
   ended_at     TEXT,
-  scope        TEXT NOT NULL CHECK (scope IN ('interactive','heartbeat','dreaming','eval')),
+  -- ⭐ 'remote' added with the gateway. It is a USER-PRESENT scope, like
+  -- 'interactive': the person is there, just on their phone over a tailnet rather than
+  -- at the keyboard. It is deliberately NOT in policy.UNATTENDED_DENY's tuple. It gets
+  -- its own value anyway because `audit --today` has to be able to answer "which turns
+  -- came in over the network?" — a gateway that cannot answer that is a gateway you
+  -- cannot trust. Existing databases carry the old CHECK and must be rebuilt; that is
+  -- safe by construction, because artifacts/ is derived and `friday rebuild` restores
+  -- it from the Markdown.
+  scope        TEXT NOT NULL CHECK (scope IN ('interactive','remote','heartbeat','dreaming','eval')),
   surfaces     TEXT NOT NULL DEFAULT '[]',   -- JSON: which devices participated
   topic        TEXT,
   turn_count   INTEGER DEFAULT 0

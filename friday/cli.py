@@ -15,6 +15,11 @@ Subcommands:
     ablation   the RSC ladder
     needle     the decisive recall benchmark
     audit      who did what, allowed or denied
+    doctor     ⭐ will FRIDAY run on THIS machine? Every way delivery fails is an
+               environment difference; each is checkable in milliseconds, and a printed
+               fix beats a README describing the author's computer.
+    serve      ⭐ the HTTP gateway — reach FRIDAY from your phone. Authenticated,
+               loopback by default, remote turns audited as `remote`.
 
 `rich` is used if installed and ignored if not. The Ledger printout is on by
 default in ask/chat because looking at it for a week teaches more about context
@@ -478,6 +483,36 @@ def cmd_needle(args) -> int:
 
 # ── parser ─────────────────────────────────────────────────────────────────────
 
+def cmd_doctor(args) -> int:
+    """`friday doctor` — will this run on THIS machine?
+
+    The deployment target is a specific laptop and development happens elsewhere, so
+    almost every way this fails to deliver is an environment difference nobody noticed.
+    Each is checkable in milliseconds, and a printed fix beats a README that describes
+    the author's machine.
+    """
+    from .doctor import run as doctor_run
+
+    rep = doctor_run(root=Path(args.root) if getattr(args, "root", None) else None)
+    if getattr(args, "json", False):
+        print(json.dumps(rep.as_dict(), indent=2))
+    else:
+        print(rep.render())
+    return 1 if rep.failed else 0
+
+
+def cmd_serve(args) -> int:
+    """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
+
+    Binds loopback unless you ask otherwise; `--host tailscale` is the intended way to
+    reach FRIDAY from your phone, because the tunnel is encrypted and the port never
+    appears on the internet.
+    """
+    from .serve import serve
+
+    return serve(host=args.host, port=args.port, token=args.token, quiet=args.quiet)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="friday", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -562,6 +597,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="friday-local")
     p.add_argument("--md", default=None); p.add_argument("--json", default=None)
     p.add_argument("--dataset-only", action="store_true")
+
+    p = sub.add_parser("doctor", help="⭐ will FRIDAY run on THIS machine?")
+    p.set_defaults(fn=cmd_doctor); common(p)
+    p.add_argument("--root", default=None, help="FRIDAY_ROOT to inspect (default: current)")
+    p.add_argument("--json", action="store_true", help="machine-readable report")
+
+    p = sub.add_parser("serve", help="⭐ the HTTP gateway — reach FRIDAY from your phone")
+    p.set_defaults(fn=cmd_serve); common(p)
+    p.add_argument("--host", default="127.0.0.1",
+                   help="127.0.0.1 (default) | tailscale | 0.0.0.0 | an explicit address")
+    p.add_argument("--port", type=int, default=8642)
+    p.add_argument("--token", default=None,
+                   help="bearer token; default reads/creates config/serve.token (0600)")
+    p.add_argument("--quiet", action="store_true")
 
     return ap
 

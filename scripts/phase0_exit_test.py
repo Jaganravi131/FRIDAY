@@ -527,15 +527,67 @@ def check_11_rss(ctx: Ctx) -> Check:
 
 
 def check_12_phone(ctx: Ctx) -> Check:
-    return Check(
-        12, "from your phone, via Tailscale, hit the API",
-        status=SKIP,
-        detail="needs your network, your phone, and a Tailscale tailnet",
-        manual=("Run `friday serve` (Phase 3) or llama-server bound to the Tailscale "
-                "interface, then curl it from the phone: `curl http://<tailscale-ip>:8080"
-                "/v1/models`. This is the Presence Fabric seed — do not skip it forever, "
-                "it is the difference between a laptop toy and something you carry."),
-    )
+    """⭐ The gateway is BUILT, so the automatable half is now automated.
+
+    This used to be a pure SKIP pointing at `friday serve` as future work. It is not
+    future work: `friday/serve.py` exists, binds, authenticates and serves a turn. What
+    genuinely cannot be automated here is the other half — your phone, your tailnet —
+    so the check proves the server side and hands you an exact command for the rest.
+    """
+    import json
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from friday import serve
+
+    try:
+        token, _, _ = serve.ensure_token(ctx.root)
+        serve.Handler.token = token
+        httpd = ThreadingHTTPServer(("127.0.0.1", 0), serve.Handler)
+        port = httpd.server_address[1]
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{port}"
+
+        def get(path, tok=None):
+            req = urllib.request.Request(base + path)
+            if tok:
+                req.add_header("authorization", f"Bearer {tok}")
+            try:
+                with urllib.request.urlopen(req, timeout=20) as r:
+                    return r.status, json.loads(r.read().decode() or "null")
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read().decode() or "null")
+
+        open_code, health = get("/health")
+        denied, _ = get("/v1/models")                       # no token -> must refuse
+        allowed, models = get("/v1/models", token)          # token    -> must serve
+        httpd.shutdown(); httpd.server_close()
+
+        if not (open_code == 200 and denied == 401 and allowed == 200
+                and models.get("data")):
+            return Check(12, "from your phone, via Tailscale, hit the API", status=FAIL,
+                         detail=f"gateway misbehaved: health={open_code} "
+                                f"no-token={denied} with-token={allowed}",
+                         manual="See `friday serve` and INSTALL.md §5.")
+        return Check(
+            12, "from your phone, via Tailscale, hit the API",
+            status=PASS,
+            detail=(f"gateway bound :{port}, /health open, /v1/models refused without a "
+                    f"token (401) and served with one; model={health.get('model')}"),
+            manual=("The server half is proven. The phone half is yours: "
+                    "`winget install Tailscale.Tailscale`, `tailscale up` on the laptop "
+                    "AND the phone, then `python -m friday serve --host tailscale` and "
+                    "open `http://<tailscale-ip>:8642/` on the phone. This is the "
+                    "Presence Fabric seed — do not skip it forever, it is the difference "
+                    "between a laptop toy and something you carry."),
+        )
+    except Exception as e:
+        return Check(12, "from your phone, via Tailscale, hit the API", status=SKIP,
+                     detail=f"could not exercise the gateway here: {type(e).__name__}: {e}",
+                     manual="Run `python -m friday serve --host tailscale` and open "
+                            "http://<tailscale-ip>:8642/ on your phone. INSTALL.md §5.")
 
 
 CHECKS = [check_1_rebuild, check_2_monday_friday, check_3_why, check_4_does_not_invent,

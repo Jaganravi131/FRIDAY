@@ -174,6 +174,10 @@ def check(
         return Decision("confirmation_required", sense,
                         "irreversible or externally visible — show the exact payload first")
 
+    # `remote` is NOT in this tuple, and that is deliberate: a turn arriving over the
+    # gateway is the user on their phone, present and able to approve something. Only
+    # scopes where nobody is watching are unattended. It still gets its own label so
+    # the audit trail can distinguish network turns from keyboard ones.
     if scope in ("heartbeat", "dreaming", "eval") and tool_name in UNATTENDED_DENY:
         log(conn, actor=scope, action=tool_name, target=_target(args), sense_id=sense,
             decision="denied", detail="unattended scope may not touch the outside world")

@@ -176,8 +176,22 @@ def redact(text: str, *, pii: bool = False, report: RedactionReport | None = Non
         return MARKER.format(kind=kind)
 
     # Protect markers already present, so re-running over stored content does not
-    # nest them into [REDACTED:[REDACTED:PAN]].
+    # nest them into [REDACTED:[REDACTED:PAN]] — and, just as importantly, does not
+    # COUNT them again.
+    #
+    # ⚠️ This protection was documented here but never implemented (`out = text`), and
+    # the consequence was self-defeating: `redact()` turns `api_key: ghp_AAA…` into
+    # `api_key: [REDACTED:CREDENTIAL]`, and the assignment-shaped CREDENTIAL pattern
+    # then matches THAT, because its value class accepts any non-space token. So a
+    # correctly redacted memory — precisely the state the system is supposed to reach —
+    # scanned as containing a credential. `friday doctor` failed the secret scan on a
+    # clean install, and the "fix" it told the user to apply was the thing it had
+    # already done. A diagnostic that alarms on success gets ignored.
     out = text
+
+    def _is_marker(value: str) -> bool:
+        return bool(value) and _ALREADY.fullmatch(value.strip()) is not None
+
     for kind, pattern in _PATTERNS:
         try:
             # Where the pattern captures the secret, keep the label that identifies it
@@ -189,12 +203,18 @@ def redact(text: str, *, pii: bool = False, report: RedactionReport | None = Non
                 def _sub(m: re.Match, k: str = kind) -> str:
                     full = m.group(0)
                     secret = m.group(1) or ""
+                    if _is_marker(secret):        # already redacted: not a new hit
+                        return full
                     report.hits[k] = report.hits.get(k, 0) + 1
                     return full.replace(secret, MARKER.format(kind=k)) if secret \
                         else MARKER.format(kind=k)
                 out = pattern.sub(_sub, out)
             else:
-                out = pattern.sub(lambda m, k=kind: mark(k), out)
+                def _bare(m: re.Match, k: str = kind) -> str:
+                    if _is_marker(m.group(0)):    # never nest, never re-count
+                        return m.group(0)
+                    return mark(k)
+                out = pattern.sub(_bare, out)
         except Exception as e:                     # never break a write over a pattern
             report.errors.append(f"{kind}: {type(e).__name__}: {e}")
 
@@ -221,9 +241,13 @@ def scan(text: str, *, pii: bool = False) -> RedactionReport:
 
     Used for the audit trail and for warning a user before they paste something they
     did not mean to store.
+
+    Text that is ALREADY redacted reports zero hits. A `[REDACTED:…]` marker is the
+    evidence that redaction happened, not a credential — counting it made `doctor`'s
+    secret scan fail on the cleanest possible memory.
     """
     rep = RedactionReport()
-    redact(text, pii=pii, report=rep)
+    redact(_ALREADY.sub(" ", text), pii=pii, report=rep)
     return rep
 
 
