@@ -52,7 +52,7 @@ def test_parser_covers_every_documented_subcommand():
     expected = {
         "build", "rebuild", "seed", "ask", "chat", "write", "search", "why",
         "history", "timecheck", "status", "audit", "export", "ablation", "needle",
-        "doctor", "serve", "bench",
+        "doctor", "serve", "bench", "senses",
     }
     assert expected <= have, f"missing: {sorted(expected - have)}"
     assert have - expected == set(), f"undocumented: {sorted(have - expected)}"

@@ -306,3 +306,85 @@ def test_web_read_withholds_a_hostile_page_end_to_end(local_server, conn, ctx, m
         "web_read", {"url": local_server + "/hostile.html"}, ctx)
     assert "error" in out and "withheld" in out
     assert "text" not in out
+
+
+# ── tiered consent: the door that was missing ──────────────────────────────────
+
+def test_senses_lists_every_grantable_sense(conn, capsys):
+    """policy.check() denies anything ungranted and says "ask, don't assume" — but until
+    this command existed there was no way to ANSWER. A permission model nobody can
+    operate is not a permission model."""
+    from friday.agent.policy import TOOL_SENSE
+    from friday.cli import SENSES, main
+
+    assert main(["senses"]) == 0
+    out = capsys.readouterr().out
+    # every sense any tool maps to must be documented and grantable
+    for sense in set(TOOL_SENSE.values()):
+        assert sense in SENSES, f"{sense} is required by a tool but not grantable"
+        assert sense in out
+
+
+def test_grant_then_revoke_round_trips(conn, capsys):
+    from friday.agent.policy import enabled_senses
+    from friday.cli import main
+
+    assert enabled_senses(conn) == []                 # nothing on by default
+    assert main(["senses", "--grant", "web.read"]) == 0
+    assert enabled_senses(conn) == ["web.read"]
+    capsys.readouterr()
+    assert main(["senses", "--revoke", "web.read"]) == 0
+    assert enabled_senses(conn) == []
+
+
+def test_granting_a_sense_does_not_disable_the_ssrf_guard(conn, ctx):
+    """⭐ Two independent layers. Consent answers "may FRIDAY read the web at all";
+    the guard answers "may it read THIS address". Granting one must not weaken the
+    other, or a single `friday senses --grant` becomes a way to reach 169.254.169.254."""
+    from friday.agent.policy import check, grant
+    from friday.agent.tools import build_registry
+
+    grant(conn, "web.read")
+    assert check(conn, "web_read", {"url": "https://example.com"},
+                 scope="interactive").verdict == "allowed"
+    reg = build_registry(phase=1)
+    for url in ("http://127.0.0.1:8642/", "http://169.254.169.254/latest/meta-data/",
+                "http://192.168.1.1/admin", "http://100.64.0.1/", "file:///etc/passwd"):
+        out = reg.invoke("web_read", {"url": url}, ctx)
+        assert out.get("error"), f"{url} reached through a granted sense"
+
+
+def test_granted_web_read_is_still_denied_unattended(conn):
+    """PRESENCE_GATED: consent is necessary but not sufficient — nobody is watching."""
+    from friday.agent.policy import check, grant
+
+    grant(conn, "web.read")
+    for scope in ("interactive", "remote"):
+        assert check(conn, "web_read", {"url": "https://example.com"},
+                     scope=scope).verdict == "allowed", scope
+    for scope in ("heartbeat", "dreaming", "eval"):
+        assert check(conn, "web_read", {"url": "https://example.com"},
+                     scope=scope).verdict == "denied", scope
+
+
+def test_unknown_sense_is_refused_with_the_known_list(conn, capsys):
+    from friday.cli import main
+
+    assert main(["senses", "--grant", "web.write"]) == 2
+    assert "unknown sense" in capsys.readouterr().out
+
+
+def test_consent_decisions_are_audited(conn, capsys):
+    """Doc 09 §8 calls the audit log the trust anchor. Granting yourself a sense is
+    exactly the kind of event it has to remember."""
+    from friday.cli import main
+
+    main(["senses", "--grant", "web.read"])
+    rows = {r["action"] for r in conn.execute(
+        "SELECT action FROM audit WHERE action LIKE 'sense%'")}
+    assert "sense.grant" in rows
+    capsys.readouterr()
+    main(["senses", "--revoke", "web.read"])
+    rows = {r["action"] for r in conn.execute(
+        "SELECT action FROM audit WHERE action LIKE 'sense%'")}
+    assert rows == {"sense.grant", "sense.revoke"}

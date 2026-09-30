@@ -20,6 +20,7 @@ Subcommands:
                fix beats a README describing the author's computer.
     serve      ⭐ the HTTP gateway — reach FRIDAY from your phone. Authenticated,
                loopback by default, remote turns audited as `remote`.
+    senses     ⭐ tiered consent — see, grant and revoke what FRIDAY may perceive
     bench      ⭐ the retrieval regression gate. Law 10 says every fine-tune must
                re-run the needle test; this makes "must" a nonzero exit code.
 
@@ -487,6 +488,75 @@ def cmd_needle(args) -> int:
 
 # ── parser ─────────────────────────────────────────────────────────────────────
 
+#: The senses a user can grant, with what each one actually permits. Tiered consent is
+#: enforced in policy.check() — "sense has never been granted. Ask, don't assume." — but
+#: until this command existed there was no way to ANSWER that ask short of writing
+#: Python. A permission model nobody can operate is not a permission model.
+SENSES: dict[str, tuple[str, str]] = {
+    "web.read":      ("read public web pages (web_read, wiki). Read-only: cannot log "
+                      "in, submit, or change anything. Still an outbound channel, so it "
+                      "is denied in unattended scopes and every fetch is announced.",
+                      "low"),
+    "calendar.read": ("read your calendar", "low"),
+    "calendar.write":("create or change calendar events — ALWAYS_CONFIRM", "medium"),
+    "email.read":    ("read your email", "medium"),
+    "email.send":    ("send email as you — ALWAYS_CONFIRM, denied unattended", "high"),
+    "location.read": ("read your location", "medium"),
+    "screen.capture":("read or search your screen — the most invasive sense here", "high"),
+    "mic.listen":    ("listen to your microphone", "high"),
+    "fs.write":      ("write files outside FRIDAY_ROOT — ALWAYS_CONFIRM", "high"),
+    "shell.exec":    ("run commands — ALWAYS_CONFIRM, denied unattended", "extreme"),
+    "network.egress":("POST to arbitrary endpoints (http_post) — ALWAYS_CONFIRM", "high"),
+}
+
+
+def cmd_senses(args) -> int:
+    """`friday senses` — who is allowed to perceive what.
+
+    Lists every sense, whether you have granted it, and what granting it permits. This
+    is the door that tiered consent was missing: policy.check() denies anything ungranted
+    and says "ask, don't assume", and before this there was no way to answer.
+    """
+    from .agent.policy import enabled_senses, grant, revoke
+    from .store import db
+
+    conn = _conn(args)
+    granted = set(enabled_senses(conn))
+
+    if args.grant or args.revoke:
+        target = args.grant or args.revoke
+        if target not in SENSES:
+            _say(f"unknown sense '{target}'. Known: {', '.join(sorted(SENSES))}")
+            return 2
+        if args.grant:
+            desc, risk = SENSES[target]
+            grant(conn, target)
+            conn.commit()
+            _say(f"✅ granted '{target}' (risk: {risk})")
+            _say(f"   {desc}")
+            if risk in ("high", "extreme"):
+                _say("   ⚠️  This is a high-risk sense. Every use is confirmation-gated "
+                     "and audited — check `friday audit --today` after a session.")
+        else:
+            revoke(conn, target)
+            conn.commit()
+            _say(f"🚫 revoked '{target}' — it will be denied from the next turn.")
+        granted = set(enabled_senses(conn))
+
+    _say("sense              granted   risk       what it permits")
+    _say("-" * 78)
+    for sid, (desc, risk) in sorted(SENSES.items(), key=lambda kv: kv[1][1]):
+        mark = "yes" if sid in granted else "—"
+        _say(f"{sid:18} {mark:9} {risk:10} {desc.split('.')[0]}.")
+    extra = sorted(granted - set(SENSES))
+    if extra:
+        _say(f"\ngranted but not documented here: {', '.join(extra)}")
+    _say("\n  grant:   friday senses --grant web.read")
+    _say("  revoke:  friday senses --revoke web.read")
+    _say("  Nothing is enabled by default, and a fresh install denies every sense.")
+    return 0
+
+
 #: Tools whose invocation means a request LEFT this machine. Announced by default.
 EGRESS_TOOLS = frozenset({"web_read", "wiki", "http_post"})
 
@@ -659,6 +729,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default="friday-local")
     p.add_argument("--md", default=None); p.add_argument("--json", default=None)
     p.add_argument("--dataset-only", action="store_true")
+
+    p = sub.add_parser("senses", help="⭐ tiered consent — grant/revoke what FRIDAY may perceive")
+    p.set_defaults(fn=cmd_senses); common(p)
+    p.add_argument("--grant", default=None, metavar="SENSE")
+    p.add_argument("--revoke", default=None, metavar="SENSE")
 
     p = sub.add_parser("doctor", help="⭐ will FRIDAY run on THIS machine?")
     p.set_defaults(fn=cmd_doctor); common(p)
