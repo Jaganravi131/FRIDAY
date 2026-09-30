@@ -43,7 +43,7 @@ invocation**.
 ├──────────────────┬─────────┬─────────┬──────────┬────────────────────────┤
 │ SLOT             │ BUDGET  │ SPENT   │ CACHE    │ SOURCE                 │
 ├──────────────────┼─────────┼─────────┼──────────┼────────────────────────┤
-│ identity         │   1,536 │   1,234 │ ♻ stable │ SOUL.md + AGENTS.md    │
+│ identity         │   1,792 │   1,470 │ ♻ stable │ SOUL.md + AGENTS.md    │
 │ user             │     512 │     248 │ ♻ stable │ USER.md                │
 │ core_memory      │     640 │     401 │ ♻ stable │ MEMORY.md              │
 │ senses           │     256 │     180 │ ♻ stable │ Sense Registry         │
@@ -300,7 +300,7 @@ class Slot:
 
 # ── THE BUDGET. Tune this, don't hardcode it in string assembly. ──────────────
 LEDGER_SPEC: tuple[Slot, ...] = (
-    Slot("identity",        1536, cached=True,  required=True,  overflow="reject"),
+    Slot("identity",        1792, cached=True,  required=True,  overflow="reject"),
     Slot("user",             512, cached=True,  required=True,  overflow="reject"),
     Slot("core_memory",      640, cached=True,  required=True,  overflow="reject"),
     Slot("senses",           256, cached=True,  required=False, overflow="truncate"),

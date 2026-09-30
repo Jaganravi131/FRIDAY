@@ -418,3 +418,96 @@ Security is necessary but it isn't what makes you *trust* something. These are:
 
 **The two severe ones to design for first:** irreversible action without consent, and device
 theft. Both are cheap to defend and catastrophic to ignore.
+
+---
+
+## 11. Implementation status (Phase 0)
+
+> Added when `friday/security/` landed. **A doc that quietly disagrees with the code is
+> worse than no doc** — the next person implements the doc. This table is the
+> reconciliation, and `SECURITY.md` is the contributor-facing version.
+
+§§1–4, 5.2, 5.3, 8 and 10 above are **implemented**. §5.1, 6 and 7 are **not**, and
+are marked below rather than left to be assumed.
+
+| Spec | Status | Where | Pinned by |
+|---|---|---|---|
+| §2 three-layer enforcement | ✅ | `agent/policy.py` (`UNATTENDED_DENY` → `ALWAYS_CONFIRM` → `TOOL_SENSE` → registry; deny beats allow) | `test_policy_and_agent.py` |
+| §3 Sense Registry, grants per sense | ✅ | `senses` table, `policy.grant/revoke/enabled_senses` | `test_policy_and_agent.py` |
+| §4 redaction at write time | ✅ | `security/redact.py`, called from `memory/facts.assert_fact` and `memory/traces.append` | `test_a_secret_never_reaches_markdown_or_sqlite`, `..._the_traces` |
+| §4 tokenisation / three redaction points | ⚠️ partial | one chokepoint per store rather than three; no tokenisation (a reversible mapping is itself a secret to protect) | — |
+| §5.1 quarantine untrusted content | ❌ **not built** | the `quarantine` table exists in `schema.sql` with **no writer**. Untrusted content is fenced and flagged *in place* instead of moved aside. Acceptable while ingest is only your own typing and files you chose to import; **not** acceptable once a sense ingests automatically. | — |
+| §5.2 L0 detection | ✅ | `security/injection.py` — regex scorer, microseconds, runs on every retrieved candidate and every `read_artifact` payload | `test_hostile_payloads_are_detected`, `test_ordinary_memory_content_is_not_flagged` |
+| §5.3 containment | ✅ and stronger than specified | see below | `tests/test_security.py` |
+| §6 MCP / skills supply chain | ❌ not built | no MCP in Phase 0. Becomes load-bearing in Phase 3, and is when the `read_artifact` symlink check stops being theoretical. | `test_read_artifact_refuses_a_symlink_pointing_outside` |
+| §7 sandboxing the execution layer | ❌ not built | no shell tool in Phase 0. `shell_sandboxed` is mapped in `TOOL_SENSE` but unimplemented. | — |
+| §8 audit log | ✅ | `audit` table; **every** decision logged, allows included | `test_cli.py` audit tests |
+| §10 threat model | ✅ current | plus the injection path demonstrated below, which the table already predicted | — |
+
+### What §5.3 became
+
+The spec says "containment — the part that actually matters", and it was right, but the
+implementation is architectural rather than a filter, and it is worth recording why.
+
+**The demonstrated attack.** Before `friday/security/` existed, an `imported` fact whose
+`source_quote` contained `</recalled>` closed the recalled slot and opened a second
+`<identity>` block in the compiled prompt — the stable prefix, the slot holding SOUL.md,
+the highest-authority content in the system. The model saw two identity blocks, the
+second instructing it to ignore its rules, call `memory_write`, and post `~/.ssh/id_rsa`
+to a webhook. Because the fact was persisted, it re-fired on **every** turn that
+retrieved it. No exploit, no malware, no network: one string into memory.
+
+**The second, worse path.** `Ledger.core_memory()` appends the decayed top-N facts to
+the prompt on **every turn unconditionally**. It does not wait for retrieval, so the tool
+contract's "this turn needs no memory" verdict gave it no protection at all — a hostile
+`object` reached the prompt even on "what time is it?".
+
+**The four layers**, in descending order of how much they can be trusted:
+
+1. `security/trust.neutralize` — structural. Rewrites `PROTECTED_TAGS` in anything below
+   `Trust.USER`, so `<recalled>` becomes `[recalled]` and the characters never reach the
+   prompt. Cannot be evaded by wording, padding, casing or nesting. Narrow on purpose:
+   `List<int>`, `2 < 3`, `</div>` and `<3` all survive, because a redactor that eats
+   ordinary prose gets switched off.
+2. `agent/policy.quote_is_user_authorised` — authority. `memory_write(source_kind="stated")`
+   claims *"the user said this"*, and that claim is **checkable** against the turn
+   history, which only the user writes. Fuzzy on distinctive tokens rather than exact
+   substring, because models paraphrase and a gate that fires on every legitimate write
+   gets disabled. This is provenance doing security work: the same evidence `/why` shows
+   the user answers whether the words are really theirs.
+3. `security/injection.detect` — heuristic, and **the only evadable layer**. Its job is
+   visibility, not blocking: a neutralized escape is silent from the user's point of
+   view, while a flagged one appears in `/why`, in `audit --today`, and appended to the
+   answer. `test_neutralization_does_not_depend_on_detection` proves layer 1 holds when
+   layer 3 misses.
+4. `security/redact` — at write time, because downstream of `assert_fact` the value is
+   already in five places.
+
+**Only the user may issue instructions.** `Trust.USER` is the sole level that may carry
+intent; `observed`, `imported`, `inferred` and `external` are data however imperative
+they read. Trust is deliberately a *different axis* from `SOURCE_CONFIDENCE`: `inferred`
+outranks `observed` on trust (FRIDAY's own output is not adversarial) while being far
+less confident (it is a guess). Collapsing the two would force one of those to be wrong.
+
+**Containment the user experiences.** Withholding alone is not enough: under `--quiet`
+the ledger notice is suppressed and the model is never told, so from its point of view a
+withheld item is indistinguishable from a retrieval miss. `Agent._announce_withheld`
+therefore appends the notice — with the signals and the originating file path — straight
+to `final_text`, rather than injecting it into the context and hoping the model relays
+it. Relying on a model to pass on a security notice is the §1 failure mode, applied to
+our own defence.
+
+### Two rules this cost us
+
+- **Never put a slot tag in prose.** The trust-boundary rule in `AGENTS.md` originally
+  said `<recalled>` while explaining that recalled content is data. That literal sat in
+  the identity slot, which renders *before* the real one, so the first tag-shaped match
+  in the prompt was the wrong fence — and anything parsing the context by fence then read
+  the identity tail, the senses block and all of core_memory as retrieved facts. Observed
+  as FRIDAY answering "what is my monthly rent" with a list of project goals. **The
+  defence was the payload.** `test_the_identity_slot_contains_no_slot_tags_at_all` now
+  fails if a slot tag appears in the prefix.
+- **`str.replace` on source code is a silent no-op when the anchor misses.** It produced
+  three "fixed" bugs that were not fixed, including a redaction patch that never landed —
+  so secrets kept flowing into Markdown and the FTS index while no test existed to notice.
+  Assert the text changed, or use a tool that errors on no-match.

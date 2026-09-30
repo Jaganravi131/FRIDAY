@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Iterable
 
 from ..util import now_iso
 
@@ -65,16 +65,110 @@ UNATTENDED_DENY: set[str] = {
 }
 
 
+# ── provenance as an authority check ───────────────────────────────────────────
+
+_STOP = frozenset("""a an the and or but if then than that this these those is are was
+were be been being of to in on at by for with from as into it its i you he she they we
+my your his their our me him her them us not no yes do does did done have has had
+about over under again more most very just so such can could will would shall should
+may might must remember note fact""".split())
+
+
+def _tokens(text: str) -> set[str]:
+    import re as _re
+
+    return {t for t in _re.findall(r"[^\W_]{4,}", (text or "").lower()) if t not in _STOP}
+
+
+def quote_is_user_authorised(quote: str, turns: Iterable[str]) -> bool:
+    """Did the user actually say something like this?
+
+    ⭐ This is the containment layer, and the reason it works is that a memory write
+    makes a CHECKABLE claim. `memory_write(source_kind="stated", source_quote=...)`
+    asserts "the user told me this". Provenance was built so `/why` could show the
+    user their own words back; the same evidence answers a security question — whether
+    those words are really theirs. Retrieval cannot help an attacker here, because the
+    authority being tested is the turn history, which only the user writes.
+
+    Fuzzy on purpose. Models paraphrase: the user says "my rent is 18000" and the
+    write carries source_quote="rent 18000 INR". Requiring an exact substring would
+    demand confirmation on every legitimate write, and a control that fires constantly
+    gets switched off — which is how security features die in practice. So this asks
+    whether the quote's *distinctive* tokens (4+ chars, not stopwords) are substantially
+    present in what the user actually said.
+
+    An ABSENT turn history returns True: with nothing to compare against there is no
+    evidence either way, and refusing every write in that state would break the first
+    turn of every session — a control that fires constantly gets switched off.
+
+    ⚠️ A turn history that EXISTS but shares no distinctive content with the claim
+    returns False, and the distinction is the whole gate. An earlier version collapsed
+    the two ("no tokens found -> cannot verify -> allow"), which meant a forged write
+    sailed through whenever the user's recent turns happened to be short: after "hi",
+    "ok" or "thanks", the token pool was empty and ANY quote was treated as
+    unverifiable rather than contradicted. The user had spoken; what they said simply
+    was not this. That is evidence of forgery, not absence of evidence.
+    """
+    if not quote or not quote.strip():
+        return True                      # no claim made, nothing to verify
+    turns = list(turns or ())
+    if not turns:
+        return True                      # absent history: cannot verify either way
+    q = _tokens(quote)
+    if not q:
+        return True                      # nothing distinctive in the claim itself
+    pool = set()
+    for t in turns:
+        pool |= _tokens(t)
+    if not pool:
+        return False                     # the user spoke, and none of it was this
+    return len(q & pool) / len(q) >= 0.6
+
+
 def check(
     conn: sqlite3.Connection,
     tool_name: str,
     args: dict[str, Any] | None = None,
     *,
     scope: str = "interactive",
+    authority_turns: Iterable[str] | None = None,
 ) -> Decision:
-    """The single choke point. Deterministic, table-driven, no model involved."""
+    """The single choke point. Deterministic, table-driven, no model involved.
+
+    `authority_turns` is what the user actually said recently. Passing it enables the
+    provenance check below; omitting it leaves every other decision unchanged, so
+    callers that have no turn history keep working rather than silently denying.
+    """
     args = args or {}
     sense = TOOL_SENSE.get(tool_name)
+
+    # ── provenance-gated write authority ───────────────────────────────────────
+    # Only fires when the write CLAIMS the user's authority (stated / user_edit).
+    # An `inferred` write is FRIDAY's own guess: it gets confidence 0, cannot outrank
+    # anything real, and is already handled by the hierarchy in facts.py — blocking it
+    # here would just stop FRIDAY from recording its own reasoning.
+    if tool_name == "memory_write" and authority_turns is not None:
+        from ..security import trust_of
+        from ..security.trust import Trust
+
+        kind = (args.get("source_kind") or "stated").lower()
+        if trust_of(kind) >= Trust.USER:
+            quote = args.get("source_quote") or ""
+            if not quote_is_user_authorised(quote, authority_turns):
+                detail = (
+                    "the write claims the user's authority but the quoted words do not "
+                    "appear in what they actually said — the justification may have come "
+                    "from retrieved or imported text instead")
+                if scope in ("heartbeat", "dreaming", "eval"):
+                    log(conn, actor=scope, action=tool_name, target=_target(args),
+                        sense_id=sense, decision="denied",
+                        detail="unauthorised provenance; " + detail)
+                    return Decision("denied", sense,
+                                    "no user present to authorise this write, and the "
+                                    "quote is not theirs")
+                log(conn, actor=scope, action=tool_name, target=_target(args),
+                    sense_id=sense, decision="confirmation_required", detail=detail)
+                return Decision("confirmation_required", sense, detail)
 
     if tool_name in ALWAYS_CONFIRM and scope == "interactive":
         return Decision("confirmation_required", sense,
@@ -86,6 +180,21 @@ def check(
         return Decision("denied", sense, f"{scope} runs unattended; this needs you present")
 
     if sense is None:
+        # ⭐ LOGGED. This branch used to return silently, which meant the audit trail
+        # recorded nothing at all during ordinary Phase 0 use: memory_search,
+        # memory_write and read_artifact are the only three tools that exist, none of
+        # them need a sense, and so every allow went unrecorded. `audit --today` came
+        # back empty after a session that had read and written the user's memory.
+        #
+        # Doc 09 §8 calls the audit log "your trust anchor", and doc 10's exit test #9
+        # requires that every decision and denial is visible. A trail that only
+        # contains refusals is not a trust anchor — it tells you what FRIDAY was
+        # stopped from doing and nothing about what it did. "FRIDAY read your memory"
+        # and "FRIDAY wrote a fact about you" are precisely the events a person should
+        # be able to ask about, and one indexed INSERT per tool call is free next to
+        # the retrieval that follows it.
+        log(conn, actor=scope, action=tool_name, target=_target(args), sense_id=None,
+            decision="allowed", detail="no sense required")
         return Decision("allowed", None, "no sense required")
 
     row = conn.execute("SELECT * FROM senses WHERE id=?", (sense,)).fetchone()

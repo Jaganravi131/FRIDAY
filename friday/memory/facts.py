@@ -172,7 +172,33 @@ def assert_fact(
     exists — `PRAGMA foreign_keys=ON` will (correctly) refuse it. Hence: reconcile
     (compute + retract) -> write Markdown -> index the fact -> record the span ->
     THEN insert the pairs.
+
+    ⭐ SECRETS ARE REDACTED HERE, before anything is persisted. This is the single
+    chokepoint every fact passes through — user-typed, model-written, imported and
+    reconciled alike — so it is the one place that has to be right. Downstream of this
+    line the value is already in `memory/facts/*.md` (Markdown is truth, and truth gets
+    backed up, synced, and maybe committed), in the SQLite row, in the FTS index, in
+    the vector store and in the supervision span. Redacting on the way out instead
+    would mean five copies to remember to clean, and missing one is a leak.
+
+    Verified by test_a_secret_never_reaches_markdown_or_sqlite, which checks all four
+    destinations — including the FTS index, the easiest to forget and the one that
+    would hand the secret back to anyone who searched for it.
     """
+    from dataclasses import replace as _replace
+
+    from ..security import redact
+
+    _fields = {}
+    for _f in ("object", "source_quote", "note", "subject"):
+        _v = getattr(fact, _f, None)
+        if isinstance(_v, str) and _v:
+            _clean = redact(_v)
+            if _clean != _v:
+                _fields[_f] = _clean
+    if _fields:
+        fact = _replace(fact, **_fields)
+
     fact.domain = fact.domain or domain_for(fact.predicate, fact.object)
     if not fact.id:
         fact.id = new_id("f")

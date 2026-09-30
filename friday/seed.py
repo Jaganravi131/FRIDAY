@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import paths
+from .security.trust import PREFIX_RULE
 
 SOUL_MD = """# FRIDAY
 
@@ -74,7 +75,8 @@ tokens and latency. If a rule can live in a skill, move it to the skill.
 5. Never retry a denied tool. Report the denial and ask.
 6. Prose over bullet points unless the user is scanning.
 7. If unsure, say so in one clause and give the best answer anyway.
-"""
+
+""" + PREFIX_RULE
 
 USER_MD = """# Who you are
 

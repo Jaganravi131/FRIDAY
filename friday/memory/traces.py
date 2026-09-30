@@ -86,6 +86,26 @@ class TraceWriter:
         return self.root / f"{stem}.jsonl"
 
     def append(self, trace: Trace) -> tuple[Path, int, int]:
+        """Append one trace. Secrets are redacted before the bytes hit the JSONL.
+
+        Traces are the rawest store in the system — everything captured, verbatim.
+        That makes them the most likely place a pasted credential ends up, and they
+        are also the files that get backed up wholesale. Doc 09 §4 puts redaction at
+        write time for exactly this reason.
+        """
+        from dataclasses import replace as _replace
+
+        from ..security import redact
+
+        _clean = redact(trace.content or "")
+        if _clean != trace.content:
+            trace = _replace(trace, content=_clean)
+        for _f in ("quote", "source_quote", "text"):
+            _v = getattr(trace, _f, None)
+            if isinstance(_v, str) and _v:
+                _c = redact(_v)
+                if _c != _v:
+                    trace = _replace(trace, **{_f: _c})
         """Write one trace. Returns (path, char_start, char_end).
 
         The char offsets are what `supervision_spans` stores, so the salience

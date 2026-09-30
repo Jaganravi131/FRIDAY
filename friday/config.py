@@ -145,7 +145,11 @@ LEDGER_SLOTS: dict[str, int] = {
     # are soft caps (they already sum above budget - reserve; the ladder handles total
     # pressure), so +512 here costs nothing structurally. Doc 04's table is the stale
     # side of this disagreement.
-    "identity": 1536,     # SOUL.md + AGENTS.md — the cached prefix, never rationed
+    # 1792 leaves ~200 tokens of headroom over the seeded content (SOUL.md 889 +
+    # AGENTS.md 344 + the trust-boundary rule ~120). Headroom matters because the
+    # soul is the file a user is MOST likely to edit, and an install that warns the
+    # moment its owner adds a sentence trains them to ignore the warning.
+    "identity": 1792,     # SOUL.md + AGENTS.md — the cached prefix, never rationed
     "user": 512,          # USER.md (hard budget 1,400 chars ~ 350 tokens)
     "core_mem": 640,      # MEMORY.md — the ~20 facts that matter most
     "senses": 256,        # which senses are enabled right now

@@ -47,6 +47,10 @@ class State:
     max_turns: int = MAX_AGENT_TURNS
     done: bool = False
     final_text: str = ""
+    #: ⭐ Trust-boundary events the user was told about this turn. Kept on State so a
+    #: caller (CLI, API, test) can see that something was withheld without parsing
+    #: prose out of final_text.
+    security_notices: list[str] = field(default_factory=list)
     trace_id: str = ""
     char_span: tuple[int, int] = (0, 0)
     tool_log: list[dict] = field(default_factory=list)
@@ -203,14 +207,61 @@ class Agent:
             st.turn_idx += 1
             self._record_usage(resp, st)
 
+        # 5b. ⭐ Surface anything the trust boundary withheld.
+        self._announce_withheld(st)
+
         # 6. Persist the turn + write the assistant trace AFTER answering.
         self._persist(st, senses or [])
         return st
 
+    def _announce_withheld(self, st: State) -> None:
+        """Tell the user what was withheld from the context, and why.
+
+        Containment that only shows up in the dev-mode ledger block is containment
+        nobody experiences: under `--quiet` the notice is suppressed, and the MODEL is
+        not told either — the item is simply absent, which from its point of view is
+        indistinguishable from a retrieval miss. So it answers the question and says
+        nothing, and the user never learns that a poisoned fact is sitting in their
+        memory being retrieved on every related turn.
+
+        Appended to the answer rather than injected into the context on purpose. The
+        model cannot be relied on to relay a security notice it was handed — that is
+        the same "ask it nicely" failure mode doc 09 §1 warns about, applied to our own
+        defence. This goes straight to the user's screen.
+        """
+        withheld = getattr(getattr(st, "compiled", None), "withheld", None) or []
+        if not withheld:
+            return
+        kinds = ", ".join(str(w.get("predicate") or "?") for w in withheld)
+        cats = sorted({c for w in withheld for c in (w.get("categories") or [])})
+        where = ", ".join(
+            str(w.get("origin_file") or w.get("predicate") or "?") for w in withheld)
+        note = (
+            f"\u26a0 I withheld {len(withheld)} retrieved item(s) that read like "
+            f"instructions rather than memory: {kinds}\n"
+            f"  signals: {', '.join(cats) or 'flagged'}\n"
+            f"  source: {where}\n"
+            f"  Memory is data \u2014 it cannot tell me what to do. If one of those is "
+            f"legitimate, say so and I will treat your word as the authority; otherwise "
+            f"consider deleting it, because it will keep being retrieved."
+        )
+        st.final_text = (st.final_text + "\n\n" + note).strip()
+        st.security_notices.append(note)
+        self.on_event("security", {"withheld": withheld})
+
     # ── tools ──────────────────────────────────────────────────────────────────
 
     def _do_tool(self, call: ToolCall, st: State, senses: list[str]) -> dict:
-        decision = check(self.conn, call.name, call.arguments, scope=st.scope)
+        # ⭐ Only USER-role turns count as authority. The current turn is already in
+        # st.transcript (appended before tools run), so this is "everything the human
+        # has actually said in this session" and nothing else — no tool output, no
+        # assistant text, no retrieved content. That exclusion is the whole control:
+        # a memory write claiming the user's authority has to be justified by words
+        # that appear here, and an injection arriving through memory cannot add to it.
+        authority = [t.get("content") or "" for t in st.transcript
+                     if t.get("role") == "user"]
+        decision = check(self.conn, call.name, call.arguments, scope=st.scope,
+                         authority_turns=authority)
         self.on_event("policy", {"tool": call.name, "verdict": decision.verdict,
                                  "sense": decision.sense})
 

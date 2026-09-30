@@ -220,15 +220,70 @@ The context contains pointers like `[… offloaded to artifacts/offloaded/o_xxx.
 
 
 def read_artifact(ctx: ToolContext, name: str, max_tokens: int = 2000) -> dict:
-    safe = Path(name).name  # never trust a path from the model
-    p = paths.ARTIFACTS / "offloaded" / safe
-    if not p.exists():
+    """Pull an offloaded block back into context.
+
+    `name` is model-supplied, so it is treated as hostile input in the strict sense —
+    not "probably fine, it came from our own model". A model that has read a
+    prompt-injected document is a model that can be told what filename to ask for.
+
+    Three things are checked, and each was a real hole:
+      * `Path(name).name` strips traversal — `../../.ssh/id_rsa` becomes `id_rsa`.
+      * Empty and dot names resolve to the offload DIRECTORY, which passes an
+        `exists()` check and then raises IsADirectoryError out of the tool call. A
+        crash in a tool is a crashed turn.
+      * A symlink planted inside artifacts/offloaded/ defeats `.name` entirely,
+        because the name is safe and the target is not. `resolve()` then re-check
+        containment is the only thing that catches it. In Phase 0 only FRIDAY writes
+        there, but Phase 3 mounts MCP skills that can write files, and this function
+        will still be the one reading them.
+
+    The payload is neutralized before it goes back: offloaded content is whatever was
+    in the slot, which for `docs` is by definition imported.
+    """
+    safe = Path(name or "").name                      # never trust a path from the model
+    if not safe or safe in (".", ".."):
+        return {"error": "artifact name must be a plain filename"}
+    root = (paths.ARTIFACTS / "offloaded").resolve()
+    p = root / safe
+    try:
+        real = p.resolve()
+    except OSError as e:
+        return {"error": f"unreadable artifact name: {e}"}
+    # Containment AFTER resolution: catches both traversal that survived .name and a
+    # symlink whose target lives outside the offload directory.
+    if real != p or not str(real).startswith(str(root) + "/") and real != root:
+        return {"error": "artifact path escapes the offload directory"}
+    if not real.is_file():                            # not exists(): a directory is not a file
         return {"error": f"no offloaded artifact named '{safe}'"}
+
+    from ..security import Verdict, detect, neutralize
     from ..util import cap_tokens
 
-    text = p.read_text(encoding="utf-8")
-    return {"name": safe, "text": cap_tokens(text, max_tokens),
-            "tokens": approx_tokens(text)}
+    try:
+        text = real.read_text(encoding="utf-8", errors="replace")
+    except OSError as e:
+        return {"error": f"could not read artifact: {e}"}
+
+    rep = detect(text)
+    if rep.verdict is Verdict.HOSTILE:
+        # Withholding here is the containment layer doing its job: the model asked for
+        # a payload that turned out to be an instruction block. It gets told, rather
+        # than being handed the block and trusted to notice.
+        try:
+            from .policy import log as _log
+
+            _log(ctx.conn, actor="agent", action="tool.read_artifact", target=safe,
+                 sense_id=None, decision="denied",
+                 detail=f"withheld: {rep.summary()}")
+        except Exception:
+            pass    # auditing must never be the reason a tool call fails
+        return {"error": (f"withheld '{safe}': it reads like instructions rather than "
+                          f"data ({rep.summary()}). Not injected into context."),
+                "withheld": rep.as_dict()}
+
+    return {"name": safe, "text": cap_tokens(neutralize(text), max_tokens),
+            "tokens": approx_tokens(text),
+            **({"suspicious": rep.as_dict()} if rep.verdict is Verdict.SUSPICIOUS else {})}
 
 
 # ── registry ───────────────────────────────────────────────────────────────────

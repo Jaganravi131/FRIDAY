@@ -1,0 +1,99 @@
+name: CI
+
+# Every push and every pull request. This exists because other people will work on
+# this repository, and the invariants below are the kind that break silently: nothing
+# stops at runtime when the stable prefix starts varying per turn, when a redactor
+# misses a pattern, or when a fact file becomes permanently stale. The test suite is
+# the only thing that notices, so it has to run on someone else's change too.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not a courtesy target — it is the primary deployment platform.
+        # Path handling, mtime granularity, file locking and symlink availability all
+        # differ there, and the watcher hashes files whose mtimes behave differently
+        # on NTFS than on ext4.
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Deliberately NO numpy, NO torch, NO sqlite-vec. The core is stdlib + sqlite3
+      # and must stay that way: the target machine is a 16 GB laptop with no CUDA, and
+      # a dependency that quietly becomes required is how a local-first project turns
+      # into a cloud project. Installing them here would let that regression pass CI.
+      - name: Install test-only dependencies
+        run: python -m pip install --upgrade pip pytest pytest-subtests
+
+      - name: Core imports with nothing but the standard library
+        run: python -c "import friday, friday.cli, friday.agent.loop, friday.ledger.compiler, friday.memory.compiler, friday.retrieval.pipeline, friday.security; print('stdlib-only core OK')"
+
+      - name: Test suite
+        run: python -m pytest tests/ -q --maxfail=5
+
+      - name: Phase 0 exit gate
+        # Conditions 11 and 2 SKIP here (they need a real model and an hour of wall
+        # clock, plus a phone on a tailnet). The other ten must pass, and the script
+        # exits nonzero on any FAIL.
+        run: python scripts/phase0_exit_test.py
+
+  hygiene:
+    name: repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every Python file parses
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+          bad = []
+          for p in sorted(pathlib.Path(".").rglob("*.py")):
+              if any(x in p.parts for x in (".git", "__pycache__", "build", "dist")):
+                  continue
+              try:
+                  ast.parse(p.read_text(encoding="utf-8"))
+              except SyntaxError as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print("all files parse")
+          PY
+
+      - name: No user data is committed
+        # Markdown is truth, but the USER's markdown is not the repository's. soul/,
+        # memory/ and artifacts/ are data; committing them would publish someone's
+        # memory — and, before redaction existed, their credentials.
+        run: |
+          if git ls-files | grep -qE '^(memory|soul|artifacts)/'; then
+            echo "user data is tracked by git:"; git ls-files | grep -E '^(memory|soul|artifacts)/'; exit 1
+          fi
+          echo "no user data tracked"
+
+      - name: No stray build artifacts in the working tree
+        run: |
+          test -z "$(git status --porcelain)" || { git status --short; exit 1; }

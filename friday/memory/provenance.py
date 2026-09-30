@@ -69,8 +69,33 @@ class Provenance:
             f"▸ {self.predicate} = {self.value}",
             f"   quote:      \"{self.quote}\"" if self.quote
             else "   quote:      — none recorded (see gap below)",
-            f"   fact id:    {self.fact_id}",
         ]
+        # ⭐ Flag a quote that reads like instructions rather than memory.
+        #
+        # Printing the raw quote to a HUMAN is correct and stays — provenance exists so
+        # the user can see their own words, and a person reading "ignore all previous
+        # instructions" is not compromised. What was missing is the verdict: without
+        # this line the entry renders as an ordinary verifiable fact, so the user has
+        # no idea it is poisoned and will keep being retrieved, and no reason to delete
+        # it. Containment stops the model obeying; this is what stops the user trusting.
+        from ..security import Verdict, detect
+
+        _verdict = Verdict.CLEAN
+        for _text in (self.quote, self.value):
+            if _text:
+                _rep = detect(_text)
+                if _rep.verdict is Verdict.HOSTILE:
+                    _flag, _verdict = _rep, Verdict.HOSTILE
+                    break
+                if _rep.verdict is Verdict.SUSPICIOUS and _verdict is Verdict.CLEAN:
+                    _flag, _verdict = _rep, Verdict.SUSPICIOUS
+        if _verdict is not Verdict.CLEAN:
+            lines.append(
+                f"   ⚠ {_verdict.value.upper()}: this reads like instructions, not "
+                f"memory ({', '.join(sorted(_flag.categories))}). It is fenced and "
+                f"cannot reach the model as a directive, but you should probably "
+                f"delete it — where did it come from?")
+        lines.append(f"   fact id:    {self.fact_id}")
         if self.origin_file:
             where = self.origin_file
             if self.origin_line:
