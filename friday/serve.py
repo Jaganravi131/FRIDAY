@@ -219,6 +219,20 @@ def _agent():
 _scope_fallback = False
 
 
+EGRESS_TOOLS = frozenset({"web_read", "wiki", "http_post"})
+
+
+def _describe_tool(t) -> str:
+    """One line per tool call; egress calls carry their destination."""
+    if not isinstance(t, dict):
+        return str(t)
+    name = t.get("origin") or t.get("tool") or ""
+    if name in EGRESS_TOOLS:
+        target = t.get("target") or t.get("url") or ""
+        return f"{name} → {target}" + ("  ✗ refused" if t.get("error") else "")
+    return name or "unknown"
+
+
 def answer(message: str, *, scope: str = "remote") -> dict:
     """Run one turn. Returns JSON-able data, never raises."""
     global _scope_fallback
@@ -241,8 +255,10 @@ def answer(message: str, *, scope: str = "remote") -> dict:
             "ledger": st.compiled.printout(st.turn_idx) if st.compiled else "",
             "withheld": list(getattr(st.compiled, "withheld", []) or []),
             "security": list(getattr(st, "security_notices", []) or []),
-            "tools": [t.get("tool") if isinstance(t, dict) else str(t)
-                      for t in (st.tool_log or [])],
+            # Names alone are not enough for the tools that mean a request LEFT the
+            # machine. The phone user gets the same observability the terminal user gets,
+            # because the exfiltration risk does not care which screen you are on.
+            "tools": [_describe_tool(t) for t in (st.tool_log or [])],
             "model": MODEL_NAME,
         }
     except Exception as e:

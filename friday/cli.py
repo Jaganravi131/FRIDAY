@@ -173,6 +173,7 @@ def cmd_ask(args) -> int:
              f"{'used' if st.intent.needs_memory else 'skipped'} · {st.intent.reason}]")
     if st.retrieved and not args.quiet:
         _say("[type `friday why` or \\why for the source quotes behind this]")
+    _announce_egress(st)
     if st.tool_log and args.verbose:
         _say("\ntool calls:")
         for t in st.tool_log:
@@ -228,6 +229,7 @@ def cmd_chat(args) -> int:
             _say(f"⟳ memory: {st.memory_sync.summary()}")
         if show_ledger and st.compiled is not None:
             _say(st.compiled.printout(turn=st.turn_idx))
+        _announce_egress(st)
         _say(f"\nfriday> {st.final_text}")
         _say("[\\why for sources · \\ledger · \\status · exit]\n")
 
@@ -484,6 +486,40 @@ def cmd_needle(args) -> int:
 
 
 # ── parser ─────────────────────────────────────────────────────────────────────
+
+#: Tools whose invocation means a request LEFT this machine. Announced by default.
+EGRESS_TOOLS = frozenset({"web_read", "wiki", "http_post"})
+
+
+def _announce_egress(st) -> None:
+    """⭐ Show every outbound request, whether or not --verbose was passed.
+
+    This exists because of an invariant in the policy tests: everything denied
+    unattended should also be confirmation-gated interactively, on the principle that
+    "the gate must depend on what the action does, not on who is watching." The
+    read-only web tools deliberately break it — confirming every page fetch would make
+    them useless, and useless safety features get disabled.
+
+    The exception is only honest if presence provides real observability, and it did
+    not: `tool_log` was printed solely under `--verbose`, so by default an interactive
+    user was present but BLIND. A URL is an outbound channel — `?d=<your data>` leaves
+    the machine in the request and shows up in the attacker's access log — so an
+    unnoticed fetch is an unnoticed exfiltration. Presence becomes a control only once
+    the fetch is on screen.
+    """
+    for t in st.tool_log or []:
+        if not isinstance(t, dict):
+            continue
+        name = t.get("origin") or t.get("tool") or ""
+        if name not in EGRESS_TOOLS:
+            continue
+        target = t.get("target") or t.get("url") or ""
+        if t.get("error"):
+            _say(f"⤷ web: {name} → {target or '(refused)'}  ✗ {str(t['error'])[:90]}")
+        else:
+            _say(f"⤷ web: {name} → {target}  "
+                 f"({t.get('injected_tokens', '?')} tokens into context, trust=external)")
+
 
 def cmd_doctor(args) -> int:
     """`friday doctor` — will this run on THIS machine?

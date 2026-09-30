@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
+import urllib.parse
 from pathlib import Path
 from typing import Any, Callable
 
@@ -286,12 +287,189 @@ def read_artifact(ctx: ToolContext, name: str, max_tokens: int = 2000) -> dict:
             **({"suspicious": rep.as_dict()} if rep.verdict is Verdict.SUSPICIOUS else {})}
 
 
+# ── untrusted payload containment ──────────────────────────────────────────────
+
+def contain_untrusted(ctx: ToolContext, text: str, *, origin: str, target: str,
+                      max_tokens: int = 2000) -> dict:
+    """The one path by which text from OUTSIDE the trust boundary enters context.
+
+    `read_artifact` grew this logic first, then `web_read` and `wiki` needed exactly the
+    same four steps. Factoring it is not tidiness: three copies of containment code is
+    three chances for one to drift, and the copy that drifts is the one that gets
+    exploited. Anything the model reads that the user did not type comes through here.
+
+    Steps, all of which were a real hole somewhere in Phase 0:
+      * `detect()` — is this text trying to be instructions rather than data?
+      * HOSTILE  -> withhold, audit the denial, and TELL the model it was withheld. A
+        model handed a payload and trusted to notice is not a defence.
+      * `neutralize()` — structurally defang any protected tags that survived.
+      * `cap_tokens()` — a 4 MB page is a denial-of-service against the ledger budget.
+    """
+    from ..security import Verdict, detect, neutralize
+    from ..util import cap_tokens
+
+    rep = detect(text)
+    if rep.verdict is Verdict.HOSTILE:
+        try:
+            from .policy import log as _log
+
+            _log(ctx.conn, actor="agent", action=f"tool.{origin}", target=target,
+                 sense_id=None, decision="denied",
+                 detail=f"withheld: {rep.summary()}")
+        except Exception:
+            pass            # auditing must never be the reason a tool call fails
+        return {"error": (f"withheld '{target}': it reads like instructions rather than "
+                          f"data ({rep.summary()}). Not injected into context."),
+                "withheld": rep.as_dict()}
+
+    capped = cap_tokens(neutralize(text), max_tokens)
+    # Two token counts, named for what they are. A single `tokens` field reporting the
+    # SOURCE size while `text` held the CAPPED payload was ambiguous in exactly the way
+    # that matters here: reading it as "what went into context" would overstate the cost,
+    # and reading it as "what the page cost" would understate it. `tokens` keeps its
+    # existing meaning for read_artifact's callers; `injected_tokens` is the one the
+    # ledger budget cares about.
+    out = {"origin": origin, "target": target, "text": capped,
+           "tokens": approx_tokens(text),
+           "injected_tokens": approx_tokens(capped)}
+    if rep.verdict is Verdict.SUSPICIOUS:
+        out["suspicious"] = rep.as_dict()
+    return out
+
+
+# ── the web, read-only ─────────────────────────────────────────────────────────
+
+WEB_READ_DOC = """Fetch a public web page and read it. READ-ONLY: this cannot log in, cannot submit a form, cannot change anything anywhere — it returns text and nothing else.
+
+Use it when the answer is not in memory and is a matter of public fact: documentation, a price page, an article, a timetable. Do NOT use it for anything about the user — that is what memory_search is for, and memory has provenance while a web page does not.
+
+Local, private and link-local addresses are refused (including this machine, your LAN, and cloud metadata endpoints), because the URL you ask for can be influenced by content you have read. That refusal is not a bug and must not be worked around."""
+
+WIKI_DOC = """Look a topic up on Wikipedia. READ-ONLY and keyless; the fastest way to get a neutral summary of a public fact.
+
+Prefer this over web_read when the question is "what is X" — it returns a summary rather than a page of navigation and boilerplate."""
+
+
+def web_read(ctx: ToolContext, url: str, max_tokens: int = 2000) -> dict:
+    """Fetch a public page. Read-only, SSRF-guarded, contained as EXTERNAL trust.
+
+    The guard lives in `security/netguard.py` and is the reason this tool can exist at
+    all: without it, a URL planted in a memory file could turn a prompt injection into a
+    request to `169.254.169.254` or to FRIDAY's own gateway on loopback. The response is
+    the *other* half of the risk, and it is handled the same way retrieved memory is —
+    detected, neutralized, capped, and never allowed to be an instruction.
+    """
+    from ..security import netguard
+
+    raw = (url or "").strip()
+    if not raw:
+        return {"error": "url is required"}
+
+    res = netguard.fetch(raw)
+    if not res.get("ok"):
+        # Loud and specific. "could not fetch" teaches the model to retry blindly; the
+        # actual reason tells it whether retrying could possibly help.
+        return {"error": res.get("error", "fetch failed"), "url": raw,
+                "retryable": not str(res.get("error", "")).startswith("refused")}
+
+    text = netguard.strip_html(res["text"])
+    if not text.strip():
+        return {"error": "page contained no readable text (script-only or empty)",
+                "url": res["url"]}
+
+    out = contain_untrusted(ctx, text, origin="web_read", target=res["url"],
+                            max_tokens=max_tokens)
+    if "error" not in out:
+        out.update({"status": res.get("status"), "truncated": res.get("truncated", False),
+                    "trust": "external"})
+    return out
+
+
+def wiki(ctx: ToolContext, topic: str, max_tokens: int = 1200) -> dict:
+    """Wikipedia summary. Two keyless calls: resolve the title, then summarise it."""
+    import json as _json
+
+    from ..security import netguard
+
+    topic = (topic or "").strip()
+    if not topic:
+        return {"error": "topic is required"}
+
+    base = "https://en.wikipedia.org"
+    q = urllib.parse.quote(topic.replace(" ", "_"))
+    res = netguard.fetch(f"{base}/api/rest_v1/page/summary/{q}", max_bytes=60_000)
+
+    if not res.get("ok"):
+        # A 404 here usually means the topic is not an exact title, so try the search
+        # endpoint once rather than giving up — but only once, and only for a 404.
+        if "404" not in str(res.get("error", "")):
+            return {"error": res.get("error"), "topic": topic, "retryable": False}
+        srch = netguard.fetch(
+            f"{base}/w/api.php?action=opensearch&limit=1&format=json&search="
+            + urllib.parse.quote(topic), max_bytes=8_000)
+        if not srch.get("ok"):
+            return {"error": f"no Wikipedia page for '{topic}'", "topic": topic,
+                    "retryable": False}
+        try:
+            titles = _json.loads(srch["text"])[1]
+        except (ValueError, IndexError, KeyError):
+            return {"error": f"no Wikipedia page for '{topic}'", "retryable": False}
+        if not titles:
+            return {"error": f"no Wikipedia page for '{topic}'", "retryable": False}
+        res = netguard.fetch(
+            f"{base}/api/rest_v1/page/summary/" + urllib.parse.quote(titles[0]),
+            max_bytes=60_000)
+        if not res.get("ok"):
+            return {"error": res.get("error"), "topic": titles[0], "retryable": False}
+
+    try:
+        data = _json.loads(res["text"])
+    except ValueError:
+        return {"error": "Wikipedia returned something that was not JSON",
+                "topic": topic, "retryable": False}
+
+    extract = (data.get("extract") or "").strip()
+    if not extract:
+        return {"error": f"no summary for '{data.get('title', topic)}' "
+                         f"(it may be a disambiguation page)",
+                "title": data.get("title"), "retryable": False}
+
+    out = contain_untrusted(ctx, extract, origin="wiki",
+                            target=data.get("title", topic), max_tokens=max_tokens)
+    if "error" not in out:
+        out.update({"title": data.get("title"),
+                    "page": (data.get("content_urls") or {}).get("desktop", {}).get("page"),
+                    "trust": "external"})
+    return out
+
+
 # ── registry ───────────────────────────────────────────────────────────────────
 
-def build_registry(*, phase: int = 0) -> ToolRegistry:
-    """Phase 0 = three tools. `read_artifact` is included because the ladder itself
-    creates the pointers it resolves — it is part of compaction, not a new capability.
+def registry_phase() -> int:
+    """Which tool phase is enabled. Defaults to 0 — memory only.
+
+    Opt-in rather than opt-out, because tiered permissions means a new sense is something
+    the user turns on deliberately, not something that appears after a `git pull`. Set
+    `FRIDAY_TOOLS_PHASE=1` to enable the read-only web tools.
     """
+    import os
+
+    try:
+        return max(0, min(1, int(os.environ.get("FRIDAY_TOOLS_PHASE", "0"))))
+    except ValueError:
+        return 0
+
+
+def build_registry(*, phase: int | None = None) -> ToolRegistry:
+    """Phase 0 = four tools (memory, note, and the offload pointer the ladder creates
+    for itself — part of compaction, not a new capability).
+
+    Phase 1 adds the read-only web: `web_read` and `wiki`. Nothing that logs in,
+    submits, or changes state anywhere; doc 16 §2.1 records why that line is where it
+    is. `phase=None` reads `FRIDAY_TOOLS_PHASE`, so callers that do not care get the
+    user's choice and the Phase 0 exit gate keeps seeing exactly four tools.
+    """
+    phase = registry_phase() if phase is None else phase
     r = ToolRegistry()
     r.register(ToolSpec("memory_search", SEARCH_DOC, {
         "type": "object",
@@ -324,4 +502,23 @@ def build_registry(*, phase: int = 0) -> ToolRegistry:
         },
         "required": ["name"],
     }, read_artifact))
+    if phase >= 1:
+        # Phase 1 = the web, READ-ONLY. Deliberately no browser, no credentials, no form
+        # submission: doc 16 §2.1 records why, and the reason is that execution
+        # sandboxing is still an unbuilt gap in SECURITY.md §5. Reaching is safe; acting
+        # is not, and the difference is the whole design.
+        r.register(ToolSpec("web_read", WEB_READ_DOC, {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "a public http(s) URL"},
+            },
+            "required": ["url"],
+        }, web_read))
+        r.register(ToolSpec("wiki", WIKI_DOC, {
+            "type": "object",
+            "properties": {
+                "topic": {"type": "string", "description": "what to look up"},
+            },
+            "required": ["topic"],
+        }, wiki))
     return r

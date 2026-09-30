@@ -209,11 +209,66 @@ def test_unattended_scope_may_still_read_and_reason(conn):
 def test_unattended_deny_list_is_a_subset_of_always_confirm():
     """Everything denied unattended is also confirmation-gated interactively. If a
     tool were denied unattended but allowed freely interactively, that would mean the
-    gate depends on who is watching rather than on what the action does."""
-    assert UNATTENDED_DENY <= ALWAYS_CONFIRM
+    gate depends on who is watching rather than on what the action does.
+
+    ⭐ One named exception, added with the read-only web tools: PRESENCE_GATED. For
+    those, who is watching IS the relevant variable — fetching a public page changes
+    nothing anywhere, and the danger is unobserved steering rather than the action
+    itself. The exception is asserted narrowly below so it cannot grow silently.
+    """
+    from friday.agent.policy import PRESENCE_GATED
+
+    assert UNATTENDED_DENY <= ALWAYS_CONFIRM | PRESENCE_GATED
+    assert ALWAYS_CONFIRM & PRESENCE_GATED == set(), \
+        "a tool is either confirmation-gated or presence-gated, never both"
+    assert PRESENCE_GATED == {"web_read", "wiki"}, \
+        "PRESENCE_GATED is a narrow exception for read-only, SSRF-guarded web tools; " \
+        "adding to it means re-arguing why a confirmation dialog would not work"
     assert ALWAYS_CONFIRM - UNATTENDED_DENY == {"delete_fact", "purge_memory"}, \
         "the two purely-destructive tools confirm interactively but are not in the " \
         "external-world deny list"
+
+
+def test_presence_gated_tools_are_read_only_and_guarded():
+    """The exception is only legitimate while these tools cannot change anything and
+    cannot be pointed at an internal address."""
+    from friday.agent.tools import build_registry
+    from friday.security import netguard
+
+    names = build_registry(phase=1).names()
+    for tool in ("web_read", "wiki"):
+        assert tool in names
+    # nothing in PRESENCE_GATED may write, send, or execute
+    from friday.agent.policy import ALWAYS_CONFIRM, PRESENCE_GATED
+    assert not (PRESENCE_GATED & ALWAYS_CONFIRM)
+    # and the guard they depend on must actually refuse the internal ranges
+    for url in ("http://127.0.0.1/", "http://169.254.169.254/", "http://10.0.0.1/",
+                "file:///etc/passwd"):
+        assert not netguard.validate_url(url).ok
+
+
+def test_egress_is_announced_without_verbose(conn, capsys):
+    """⭐ Presence is only a control if the fetch is on screen. tool_log used to print
+    solely under --verbose, which made an interactive user present but blind — and an
+    unnoticed URL is an unnoticed exfiltration."""
+    from friday.cli import _announce_egress
+
+    class St:
+        tool_log = [
+            {"origin": "web_read", "target": "https://example.com/a",
+             "injected_tokens": 412, "trust": "external"},
+            {"origin": "wiki", "target": "Chennai", "injected_tokens": 90},
+            {"origin": "memory_search", "target": "rent"},
+            {"origin": "web_read", "url": "http://127.0.0.1:8642/",
+             "error": "refused: loopback"},
+        ]
+
+    _announce_egress(St())
+    out = capsys.readouterr().out
+    assert "https://example.com/a" in out          # the destination is visible
+    assert "Chennai" in out
+    assert "memory_search" not in out              # non-egress tools are not noise here
+    assert "refused" in out and "127.0.0.1" in out  # and a blocked attempt is shown too
 
 
 # ── the refusal message and the audit log ─────────────────────────────────────
