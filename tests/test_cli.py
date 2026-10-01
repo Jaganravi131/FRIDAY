@@ -179,7 +179,11 @@ def test_write_records_a_fact_and_reports_the_file(cli, isolated_paths):
     # predicate, or the user cannot find what they just wrote.
     assert "Recorded lease_amount_monthly = 18000 INR" in out
     assert "stored as" in out and "monthly_rent" in out
-    assert "memory/facts/" in out
+    # Either separator. The CLI prints a real filesystem path, and on Windows that is
+    # `memory\facts\housing.md` — which is CORRECT output there, not a bug: showing a
+    # Windows user a POSIX path they cannot paste into Explorer would be worse. The
+    # assertion is about the file being named, not about the platform's separator.
+    assert ("memory/facts/" in out) or ("memory\\facts\\" in out), out
     assert "-> None" not in out, "a real write must name a real file"
     housing = isolated_paths / "memory" / "facts" / "housing.md"
     assert housing.exists() and "18000" in housing.read_text(encoding="utf-8")

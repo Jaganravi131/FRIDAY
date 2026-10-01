@@ -57,9 +57,17 @@ from .agent.tools import build_registry
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
+#: Connections opened by `_conn` during one `main()` call, so `main()` can close them.
+#: A module-level list rather than a per-command `with` because ~15 commands call
+#: `_conn` and rewriting each one is 15 chances to miss one.
+_OPEN_CONNS: list[sqlite3.Connection] = []
+
+
 def _conn(args) -> sqlite3.Connection:
     p = Path(args.db) if getattr(args, "db", None) else paths.DB_PATH
-    return store_db.connect(p)
+    conn = store_db.connect(p)
+    _OPEN_CONNS.append(conn)
+    return conn
 
 
 def _say(msg: str = "") -> None:
@@ -783,7 +791,27 @@ def main(argv: list[str] | None = None) -> int:
     # let `friday ablation` / `friday needle` import their scripts
     sys.path.insert(0, str(_scripts_dir()))
     kw = {k: v for k, v in vars(args).items() if k not in ("fn", "cmd")}
-    return args.fn(argparse.Namespace(**kw))
+    try:
+        return args.fn(argparse.Namespace(**kw))
+    finally:
+        # ⭐ Close every connection this call opened. Not hygiene for its own sake:
+        # Windows cannot delete or rename a file that is still open (`WinError 32`),
+        # so a leaked handle breaks the Law-2 rebuild path — `friday rebuild` unlinks
+        # artifacts/friday.db, and on Windows it fails if any earlier command in the
+        # same process left the DB open. POSIX unlinks open files silently, which is
+        # why this never showed up on the machine it was written on. It also matters
+        # across processes: a running gateway holds its own handle, so `rebuild` on
+        # Windows needs the gateway stopped — see compiler.rebuild's error message.
+        #
+        # Errors while closing are swallowed deliberately: the command's own result (or
+        # its exception) is what the caller needs, and a failure to CLOSE a database we
+        # already finished reading must not replace it.
+        while _OPEN_CONNS:
+            conn = _OPEN_CONNS.pop()
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
 
 
 if __name__ == "__main__":

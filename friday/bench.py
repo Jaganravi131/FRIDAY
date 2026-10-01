@@ -230,46 +230,57 @@ def run(*, verbose: bool = False) -> Result:
         cli(["build"])
 
         conn = db.connect(paths.DB_PATH)
-        emb, rr = get_embedder(), get_reranker()
-        res.embedder = getattr(emb, "name", type(emb).__name__)
-        res.reranker = getattr(rr, "name", type(rr).__name__)
-        res.floor = float(getattr(rr, "recommended_floor", 0.0))
+        try:
+            emb, rr = get_embedder(), get_reranker()
+            res.embedder = getattr(emb, "name", type(emb).__name__)
+            res.reranker = getattr(rr, "name", type(rr).__name__)
+            res.floor = float(getattr(rr, "recommended_floor", 0.0))
 
-        t0 = time.perf_counter()
-        hits1 = hits5 = 0
-        rr_sum = 0.0
-        per_class: dict[str, list[float]] = {}
-        quoted = shipped = 0
+            t0 = time.perf_counter()
+            hits1 = hits5 = 0
+            rr_sum = 0.0
+            per_class: dict[str, list[float]] = {}
+            quoted = shipped = 0
 
-        for query, expected, cls in QUERIES:
-            out = search(conn, query)
-            preds = [_predicate_of(c) for c in out.kept[:5]]
-            res.queries += 1
-            rank = preds.index(expected) + 1 if expected in preds else 0
-            h1 = 1.0 if rank == 1 else 0.0
-            h5 = 1.0 if rank else 0.0
-            hits1 += h1
-            hits5 += h5
-            rr_sum += (1.0 / rank) if rank else 0.0
-            per_class.setdefault(cls, []).append(h5)
-            if verbose:
-                print(f"  {'✓' if rank else '✗'} {query!r:46} -> {preds[:3] or '[]'}")
-            for c in out.kept[:5]:
-                shipped += 1
-                if (getattr(c.row, "keys", None) and "source_quote" in c.row.keys()
-                        and c.row["source_quote"]):
-                    quoted += 1
-
-        for query in UNANSWERABLE:
-            out = search(conn, query)
-            res.unanswerable += 1
-            if out.kept:
-                res.false_positive_rate += 1.0
+            for query, expected, cls in QUERIES:
+                out = search(conn, query)
+                preds = [_predicate_of(c) for c in out.kept[:5]]
+                res.queries += 1
+                rank = preds.index(expected) + 1 if expected in preds else 0
+                h1 = 1.0 if rank == 1 else 0.0
+                h5 = 1.0 if rank else 0.0
+                hits1 += h1
+                hits5 += h5
+                rr_sum += (1.0 / rank) if rank else 0.0
+                per_class.setdefault(cls, []).append(h5)
                 if verbose:
-                    print(f"  ✗ UNANSWERABLE {query!r} returned "
-                          f"{[_predicate_of(c) for c in out.kept[:3]]}")
+                    print(f"  {'✓' if rank else '✗'} {query!r:46} -> {preds[:3] or '[]'}")
+                for c in out.kept[:5]:
+                    shipped += 1
+                    if (getattr(c.row, "keys", None) and "source_quote" in c.row.keys()
+                            and c.row["source_quote"]):
+                        quoted += 1
 
-        res.seconds = round(time.perf_counter() - t0, 3)
+            for query in UNANSWERABLE:
+                out = search(conn, query)
+                res.unanswerable += 1
+                if out.kept:
+                    res.false_positive_rate += 1.0
+                    if verbose:
+                        print(f"  ✗ UNANSWERABLE {query!r} returned "
+                              f"{[_predicate_of(c) for c in out.kept[:3]]}")
+
+            res.seconds = round(time.perf_counter() - t0, 3)
+        finally:
+            # ⭐ Close before the TemporaryDirectory is removed. On Windows a file
+            # that is still open CANNOT be deleted — `WinError 32` — so an unclosed
+            # connection turns temp-dir cleanup into a PermissionError that masks
+            # whatever the benchmark was actually doing. POSIX unlinks open files
+            # happily, which is why this is invisible on the machine it was written
+            # on and fatal on the machine FRIDAY ships to. It is in a `finally`
+            # because a scoring exception must surface as itself, not as a cleanup
+            # error about a locked database.
+            conn.close()
 
     # Restore BEFORE computing the summary: nothing below needs the temp root, and a
     # `finally` here would leave the caller pointed at a deleted directory if any of the

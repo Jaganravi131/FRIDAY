@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 
 def test_seed_writes_and_compiles(seeded):
     conn, stats = seeded
@@ -268,3 +270,87 @@ def test_the_citation_fallback_does_not_leak_into_retrieval_or_supervision(seede
         "a Markdown bullet is an assertion, not an utterance; it must not supervise w_t"
     )
     assert supervision is not None
+
+
+def test_rebuild_says_what_to_do_when_the_database_is_locked(seeded, root, monkeypatch):
+    """⭐ Windows cannot delete a file another process holds open. `friday rebuild`
+    deletes artifacts/friday.db, so on Windows it fails whenever a gateway or a chat
+    session is running — and the raw `PermissionError: [WinError 32] The process cannot
+    access the file because it is being used by another process` reads like a bug in
+    FRIDAY rather than what it actually is: a second FRIDAY.
+
+    Simulated here by making unlink raise exactly that error, so the behaviour is pinned
+    on every platform rather than only being observable on a Windows runner. POSIX
+    unlinks open files silently, which is why this class of bug is invisible on the
+    machine it was written on.
+    """
+    import pathlib as _pl
+
+    from friday.memory import compiler
+
+    conn, _ = seeded
+    real_unlink = _pl.Path.unlink
+
+    def locked_unlink(self, *a, **kw):
+        if self.name == "friday.db":
+            raise PermissionError(13, "The process cannot access the file because it is "
+                                      "being used by another process")
+        return real_unlink(self, *a, **kw)
+
+    monkeypatch.setattr(_pl.Path, "unlink", locked_unlink)
+
+    with pytest.raises(RuntimeError) as ei:
+        compiler.rebuild(root / "artifacts" / "friday.db")
+    msg = str(ei.value)
+    assert "friday serve" in msg, "must name the process that is usually holding the file"
+    assert "Markdown is untouched" in msg, "must say nothing was lost"
+    assert "WinError" not in msg.split("Underlying:")[0], (
+        "the guidance must come before the raw OS detail, not after it"
+    )
+
+    # and the promise in the message must be true: the truth survived
+    facts = list((root / "memory" / "facts").rglob("*.md"))
+    assert facts, "a failed rebuild must not have touched the Markdown"
+
+
+def test_the_cli_closes_the_connections_it_opened(seeded, root, monkeypatch):
+    """The leak behind the Windows rebuild failure, pinned at its source.
+
+    `_conn()` opened a connection per command and `main()` never closed any of them. On
+    POSIX that is invisible — the process exits, and an open file can still be unlinked.
+    On Windows the handle survives for the life of the process, so `friday rebuild`
+    after `friday search` in the same process fails to delete the database. Tests call
+    `main()` repeatedly in one process, which is exactly the CLI's own `cli()` helper
+    doing what a Windows user's shell would do across processes.
+    """
+    import sqlite3
+
+    from friday import cli as cli_mod
+
+    monkeypatch.setenv("FRIDAY_ROOT", str(root))
+
+    # Count what main() OPENS, because _OPEN_CONNS is empty by the time it returns —
+    # that emptiness is the fix, so it cannot also be the evidence that anything happened.
+    opened: list = []
+    real_connect = cli_mod.store_db.connect
+
+    def counting_connect(*a, **kw):
+        c = real_connect(*a, **kw)
+        opened.append(c)
+        return c
+
+    monkeypatch.setattr(cli_mod.store_db, "connect", counting_connect)
+    cli_mod._OPEN_CONNS.clear()
+
+    assert cli_mod.main(["search", "rent"]) == 0
+    assert opened, "search must have opened a connection for this test to mean anything"
+    assert cli_mod._OPEN_CONNS == [], (
+        f"{len(cli_mod._OPEN_CONNS)} connection(s) still tracked after main() returned — "
+        f"on Windows these block `friday rebuild` from deleting artifacts/friday.db"
+    )
+    # Not merely dropped from the list: ACTUALLY closed. sqlite3 has no `.closed`, so
+    # the proof is that using it raises. A list that was cleared without closing would
+    # pass the assertion above and still leak the handle.
+    for c in opened:
+        with pytest.raises(sqlite3.ProgrammingError):
+            c.execute("SELECT 1")

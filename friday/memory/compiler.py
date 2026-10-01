@@ -437,10 +437,29 @@ def compile_all(
 
 
 def rebuild(db_path: Path | str | None = None, *, embedder=None) -> CompileStats:
-    """The Law-2 verification path: delete the artifact, rebuild from Markdown."""
+    """The Law-2 verification path: delete the artifact, rebuild from Markdown.
+
+    ⭐ On Windows this can fail where POSIX cannot: a file that any process holds open
+    cannot be deleted (`PermissionError` / `WinError 32`). The usual holder is a running
+    `friday serve`, which keeps a connection for the life of the gateway. The raw
+    exception says only "being used by another process" and names a temp path, which
+    reads like a bug in FRIDAY rather than what it is — a second FRIDAY. Since Markdown
+    is untouched by a failed rebuild, nothing is at risk, so the message says what to do
+    instead of leaving the user to guess.
+    """
     p = Path(db_path) if db_path else paths.DB_PATH
     for suffix in ("", "-wal", "-shm"):
         q = Path(str(p) + suffix)
-        if q.exists():
+        if not q.exists():
+            continue
+        try:
             q.unlink()
+        except OSError as e:
+            raise RuntimeError(
+                f"cannot delete {q.name}: another process is holding it open. "
+                f"Stop any running `friday serve` (or `friday chat`) and retry. "
+                f"Your Markdown is untouched — nothing was lost, the rebuild simply "
+                f"did not start. (Windows cannot delete an open file; POSIX can, which "
+                f"is why this only happens there.) Underlying: {type(e).__name__}: {e}"
+            ) from e
     return compile_all(db_path=p, embedder=embedder)
