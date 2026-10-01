@@ -153,9 +153,11 @@ def rewrite_query(query: str, recent_turns: Sequence[str] = ()) -> str:
     return q
 
 
-_STOP = {"the", "a", "an", "is", "are", "was", "were", "what", "which", "who", "do",
-         "does", "did", "my", "your", "me", "i", "of", "to", "in", "on", "for", "and",
-         "or", "it", "that", "this", "about", "tell", "know", "remember"}
+#: ⭐ NOT a second list. This used to be one, and it disagreed with `db._STOPWORDS` —
+#: which is what the LexicalReranker scores against. Recall finding a fact and the
+#: reranker discarding it is the failure mode the reranker's own docstring warns about,
+#: and two stopword lists is how you get it by accident.
+from ..store.db import CONTENT_STOPWORDS as _STOP
 
 
 def _cell(row: Any, key: str, default: Any = None) -> Any:

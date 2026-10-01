@@ -311,6 +311,22 @@ def check_disk(rep: Report, root: Path) -> None:
                 "A quantized 1.2B model is ~1 GB; the artifacts and traces grow slowly.")
 
 
+def _rel(d: Path, root: Path) -> str:
+    """`d` relative to `root`, falling back to the absolute path when it is not inside it.
+
+    `Path.relative_to` RAISES `ValueError` rather than returning something usable, so a
+    report line that only exists to say "this directory is missing" used to be able to
+    crash the whole check. `run()` now rebinds paths for `--root`, which makes the two
+    agree, but `check_layout` is also a plain function other code can call with any
+    root — and a diagnostic must not depend on its caller having set globals correctly
+    first. This is the difference between "soul/ is missing" and a stack trace.
+    """
+    try:
+        return str(d.relative_to(root))
+    except ValueError:
+        return str(d)
+
+
 def check_layout(rep: Report, root: Path) -> None:
     from . import paths
 
@@ -327,7 +343,7 @@ def check_layout(rep: Report, root: Path) -> None:
         rep.add("FRIDAY_ROOT", "fail", f"{root} is not writable: {e}",
                 "Pick a directory you own, or unset FRIDAY_ROOT to use the default.")
 
-    missing = [str(d.relative_to(root)) for d in (paths.SOUL, paths.FACTS, paths.TRACES)
+    missing = [_rel(d, root) for d in (paths.SOUL, paths.FACTS, paths.TRACES)
                if not d.exists()]
     if missing:
         rep.add("Directory layout", "warn", f"missing: {', '.join(missing)}",
@@ -510,24 +526,59 @@ def check_optional(rep: Report) -> None:
 
 
 def run(*, root: Path | None = None) -> Report:
-    """Every check, in the order you would debug them."""
+    """Every check, in the order you would debug them.
+
+    ⭐ `--root` MEANS IT. Several checks read the module-level `paths.*` constants
+    rather than the `root` argument — `check_store` looks at `paths.DB_PATH`,
+    `check_secrets` walks `paths.MEMORY`. Passing a different root therefore used to
+    produce a report about the WRONG directory while claiming to be about the one you
+    asked for, and `check_layout` crashed outright because `paths.SOUL.relative_to(root)`
+    raised when the two disagreed. That matters disproportionately here: `friday doctor`
+    is the command the deployment target runs first, on a machine that is not the
+    author's, and a silent wrong answer is worse than the crash that revealed it.
+
+    So an explicit root rebinds `paths` for the duration of the run and restores it
+    afterwards. Restoring is not optional politeness — `run()` is a library function,
+    and a caller that inspects one root and then writes memory would otherwise write it
+    into the inspected tree.
+    """
+    from functools import partial
+
     from . import paths
 
     rep = Report()
-    root = Path(root or paths.ROOT)
-    for fn in (check_runtime,
-               lambda r: check_disk(r, root),
-               lambda r: check_layout(r, root),
-               lambda r: check_store(r, root),
-               check_model,
-               check_phone_access,
-               check_secrets,
-               lambda r: check_backup(r, root),
-               check_optional):
-        try:
-            fn(rep)
-        except Exception as e:      # a crashed check is a finding, not a stack trace
-            name = getattr(fn, "__name__", "check")
-            rep.add(name, "fail", f"the check itself crashed: {type(e).__name__}: {e}",
-                    "Report this — the doctor should never be the thing that breaks.")
+    previous = paths.ROOT
+    requested = Path(root) if root is not None else None
+    rebound = False
+    try:
+        if requested is not None and requested.resolve() != Path(previous).resolve():
+            paths.rebind(requested)
+            rebound = True
+        root = Path(requested or paths.ROOT)
+
+        # ⭐ (label, callable) rather than a bare list of callables. The label is only
+        # used when the check itself crashes, which is exactly the moment a name matters
+        # and exactly the moment `fn.__name__` is least likely to be one: the root-bound
+        # checks were wrapped in lambdas, so a crash reported `❌ <lambda>` with a
+        # ValueError about paths — a diagnostic that cannot name the thing that broke.
+        checks = (
+            ("check_runtime", check_runtime),
+            ("check_disk", partial(check_disk, root=root)),
+            ("check_layout", partial(check_layout, root=root)),
+            ("check_store", partial(check_store, root=root)),
+            ("check_model", check_model),
+            ("check_phone_access", check_phone_access),
+            ("check_secrets", check_secrets),
+            ("check_backup", partial(check_backup, root=root)),
+            ("check_optional", check_optional),
+        )
+        for name, fn in checks:
+            try:
+                fn(rep)
+            except Exception as e:      # a crashed check is a finding, not a stack trace
+                rep.add(name, "fail", f"the check itself crashed: {type(e).__name__}: {e}",
+                        "Report this — the doctor should never be the thing that breaks.")
+    finally:
+        if rebound:
+            paths.rebind(previous)
     return rep

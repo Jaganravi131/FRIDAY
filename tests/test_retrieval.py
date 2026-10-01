@@ -156,16 +156,30 @@ def test_the_floor_returns_empty_rather_than_noise(facts):
 
 def test_the_floor_rejects_a_candidate_that_recall_actually_found(facts):
     """The second bucket, pinned separately because it is the one that proves the
-    floor is doing work. "tell me about Ramesh" DOES recall the landlord fact, and
-    the lexical reranker scores it ~0.40 — below the 0.45 the weak scorer
-    recommends — because the fact body never says "landlord", only the quote does.
+    floor is doing work. "what did Ramesh say about the deposit and notice period"
+    DOES recall the landlord fact — the name matches, so recall is right to surface
+    it — and the reranker then rejects it, because the question is really about a
+    deposit and a notice period and FRIDAY has never been told about either.
 
-    Shipping it anyway would be exactly the plausible-looking noise Law 4 forbids.
-    Note this is a property of the LEXICAL fallback: a cross-encoder would score the
-    same pair far higher. A weaker scorer being more willing to return [] is the
-    intended trade, not a defect.
+    Shipping it anyway would be exactly the plausible-looking noise Law 4 forbids:
+    a confident-looking answer to a question that was not asked. Note this is a
+    property of the LEXICAL fallback — a cross-encoder would score the same pair far
+    higher — and a weaker scorer being more willing to return [] is the intended
+    trade, not a defect.
+
+    ⚠️ This test used to use the query "tell me about Ramesh" and asserted that it
+    was rejected. That assertion was WRONG, and it stayed wrong for a long time
+    because it was true of the system: the reranker scored coverage as
+    `|q ∩ ct| / |q|`, and "tell" was not in the stopword list, so a politeness word
+    halved the score of an otherwise perfect match. The single fact FRIDAY holds
+    about Ramesh IS the landlord fact, so returning it is the answer, not noise.
+    The test had mistaken an observed behaviour for a desirable property. When the
+    stopword list was unified, "tell me about Ramesh" started scoring 0.725 and
+    clearing the floor — correctly — and this test caught it. Rewriting the query
+    rather than the assertion keeps the intent (the floor does work) and drops the
+    artifact (filler words penalising coverage). See the invariance test below.
     """
-    r = _search(facts, "tell me about Ramesh", floor=0.45)
+    r = _search(facts, "what did Ramesh say about the deposit and notice period", floor=0.45)
     assert r.considered >= 1, "recall must find the candidate for the floor to reject it"
     assert r.kept == []
     assert r.dropped_below_floor == r.considered
@@ -173,6 +187,73 @@ def test_the_floor_rejects_a_candidate_that_recall_actually_found(facts):
     # and the same fact IS shippable when the question actually matches it
     good = _search(facts, "who is my landlord", floor=0.45)
     assert good.kept, "a well-matched phrasing must clear the same floor"
+
+
+@pytest.mark.parametrize(("bare", "asked"), [
+    # (the noun phrase, the same question a human would actually type)
+    ("landlord name", "who is my landlord"),
+    ("landlord name", "tell me who my landlord is called"),
+    ("monthly rent", "how much is my monthly rent"),
+    ("monthly rent", "what do I pay in rent each month"),
+    ("lives_in", "where do I live"),
+])
+def test_asking_a_question_retrieves_the_same_thing_as_the_noun_phrase(facts, bare, asked):
+    """⭐ THE INVARIANCE THAT WAS BROKEN, pinned so it cannot break quietly again.
+
+    Wrapping a fact in a question must not cost recall. "when is my standup" and
+    "my standup" are the same request in different clothes, and an assistant that
+    answers one and says *"I don't have anything in memory"* to the other is not
+    subtly worse — it is untrustworthy, because the user cannot predict which
+    phrasings work.
+
+    The cause was three stopword lists that disagreed. `db._STOPWORDS`, which the
+    reranker scores against, was missing `when`, `where`, `why`, `how`, `which` and
+    `who`; `pipeline._STOP` had some of them and not others; `policy._STOP` is a
+    fourth list for a genuinely different job. Since coverage divides by `|q|`, one
+    unstripped question word halved the score and pushed a perfect match under the
+    0.45 floor. `friday bench` measured the damage at 37 points of recall@5 —
+    interrogative 0.545 against noun 0.917 — and after the lists were unified the
+    interrogative class went to 1.000, the gap went negative, and overall recall@5
+    moved 0.630 -> 0.815.
+
+    This test is deliberately phrased as an EQUALITY of outcomes, not as absolute
+    scores. Scores are tuned; the relationship is a law.
+    """
+    assert _search(facts, bare, floor=0.45).kept, f"control query {bare!r} must retrieve"
+    r_bare = {c.ref for c in _search(facts, bare, floor=0.45).kept}
+    r_asked = {c.ref for c in _search(facts, asked, floor=0.45).kept}
+    assert r_asked == r_bare, (
+        f"{asked!r} retrieved {r_asked or 'nothing'} but the equivalent noun phrase "
+        f"{bare!r} retrieved {r_bare}: phrasing changed the answer"
+    )
+
+
+def test_a_month_is_not_treated_as_a_modal(facts):
+    """The stopword list must not eat words that carry meaning in another part of
+    speech. "may" is a modal and it is also a month; stripping it would turn
+    "is my leave in may approved" into a query about leave that cannot be told apart
+    from any other leave question. Recall beats brevity on an ambiguous token.
+    """
+    from friday.store.db import CONTENT_STOPWORDS, fts_terms
+
+    assert "may" not in CONTENT_STOPWORDS
+    assert "may" in fts_terms("is my leave in may approved")
+    # ...while the unambiguous modals do go.
+    assert "could" in CONTENT_STOPWORDS and "could" not in fts_terms("could you remind me")
+
+
+def test_there_is_one_canonical_stopword_list(facts):
+    """The three lists must stay one. Recall and the reranker disagreeing is the
+    failure mode the reranker's own docstring warns about, and it happens by
+    accident — nobody edits two frozensets on purpose, they edit the one in front of
+    them. This is an import check, not a style check.
+    """
+    from friday.retrieval import pipeline
+    from friday.retrieval.rerankers import _STOPWORDS as reranker_list
+    from friday.store.db import CONTENT_STOPWORDS
+
+    assert pipeline._STOP is CONTENT_STOPWORDS
+    assert reranker_list is CONTENT_STOPWORDS
 
 
 def test_a_higher_floor_keeps_fewer_results(facts):

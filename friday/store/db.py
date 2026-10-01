@@ -404,11 +404,54 @@ def fts_delete(conn: sqlite3.Connection, ref: str, kind: str | None = None) -> N
 #: Words that carry no retrieval signal. Not a full stopword list — just the ones
 #: that appear in nearly every question and in no fact, where they do pure damage by
 #: dragging down overlap scores.
-_STOPWORDS = frozenset({
-    "what", "whats", "is", "are", "was", "were", "the", "a", "an", "my", "your",
-    "do", "does", "did", "i", "me", "of", "to", "in", "on", "at", "for", "and",
-    "or", "it", "that", "this", "there", "be", "am", "about",
+#: ⭐ The ONE canonical list of words that carry no retrieval signal in a
+#: conversational query. Shared by `fts_terms` (the recall layer), `LexicalReranker`
+#: (the scoring layer) and `pipeline._content_words`, because those three must agree:
+#: the reranker's own docstring says so, and disagreement is not a rounding error.
+#:
+#: There were three lists. The recall layer and the reranker shared one that was missing
+#: `when`, `where`, `why`, `how`, `which` and `who`; the pipeline had a different one
+#: that had some of them. The consequence was measurable, not theoretical: the reranker
+#: scores `coverage = |q ∩ ct| / |q|`, so a single unstripped question word halved the
+#: score. "my standup" scored 0.738 and was kept; "when is my standup" scored ~0.39,
+#: fell under the 0.45 floor, and FRIDAY answered *"I don't have anything in memory
+#: about that"* for a fact it had. `friday bench` recorded interrogative recall@5 at
+#: 0.545 against 0.917 for noun phrases — a 37-point gap caused entirely by six missing
+#: words in a frozenset.
+#:
+#: Deliberately EXCLUDED: "may". It is a modal and it is also a month, and silently
+#: dropping the month from "is my leave in may approved" is a worse failure than leaving
+#: a modal in the query. Ambiguity loses to recall here. Same reasoning excludes "will",
+#: "march" and "april" — the modal reading is common but the proper-noun reading is
+#: catastrophic to drop.
+CONTENT_STOPWORDS = frozenset({
+    # articles, determiners, possessives
+    "the", "a", "an", "this", "that", "these", "those", "there", "here",
+    "my", "your", "his", "her", "its", "our", "their",
+    # be / have / do
+    "is", "are", "was", "were", "be", "been", "being", "am",
+    "do", "does", "did", "done", "have", "has", "had",
+    # pronouns
+    "i", "you", "he", "she", "they", "we", "me", "him", "them", "us",
+    # prepositions and conjunctions
+    "of", "to", "in", "on", "at", "by", "for", "with", "from", "as", "into",
+    "and", "or", "but", "if", "then", "than", "about",
+    # ⭐ interrogatives — the six whose absence caused the cliff
+    "what", "whats", "when", "whens", "where", "wheres", "why", "how", "hows",
+    "which", "who", "whom", "whose",
+    # quantifiers
+    "much", "many", "some", "any", "every", "each", "all", "more", "most", "few",
+    # modals (see the exclusion note above — "may" is NOT here)
+    "can", "cant", "cannot", "could", "would", "should", "shall", "will", "must",
+    "might",
+    # conversational filler that never identifies a fact
+    "please", "tell", "know", "remember", "think", "guess", "maybe", "actually",
+    "just", "really", "very", "also", "still", "even",
 })
+
+#: Back-compat alias. The underscored name was imported by rerankers.py and asserted on
+#: in tests; renaming the concept without breaking the imports is the cheaper migration.
+_STOPWORDS = CONTENT_STOPWORDS
 
 
 def fts_terms(user_text: str) -> list[str]:

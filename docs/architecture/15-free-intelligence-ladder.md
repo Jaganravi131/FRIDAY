@@ -167,10 +167,24 @@ reranker. Four upgrades, in order of value:
    fail on different queries; reciprocal-rank fusion combines them for a measured gain
    that costs nothing but code. FRIDAY has both halves and does not fuse them.
 2. **Query expansion / HyDE.** Rewrite the question, or have the model write a
-   hypothetical answer and embed *that*. This is the direct fix for the bug found while
-   testing the gateway: `who is my manager` scores below the floor while `my manager`
-   retrieves fine, because the hashing embedder dilutes on interrogative tokens. A
-   question-word-aware rewrite closes that class entirely.
+   hypothetical answer and embed *that*.
+
+   > **Correction, and a lesson about diagnosing from symptoms.** This lever was
+   > originally justified by the gateway bug where `who is my manager` scored below the
+   > floor while `my manager` retrieved fine, and it blamed "the hashing embedder
+   > diluting on interrogative tokens". That diagnosis was **wrong**. The embedder was
+   > not involved: the *lexical* reranker divides coverage by the number of query words,
+   > and `when`/`who`/`where`/`why`/`how`/`which` were absent from the stopword list it
+   > used, so a question word halved the score of an otherwise perfect match. Six words
+   > in a frozenset, not a modelling limitation. Unifying the three stopword lists into
+   > `db.CONTENT_STOPWORDS` took interrogative recall@5 from 0.545 to **1.000** with no
+   > new dependency and no model at all.
+   >
+   > Query expansion remains worth doing — but for **paraphrase**, which is still 0.000
+   > and is genuinely a semantics problem ("who do I report to" shares no token with a
+   > fact about a manager). The cheap version is lever 4, a real embedder; HyDE is the
+   > version that also needs a model good enough to write a plausible hypothetical
+   > answer, which is a higher bar than it sounds like.
 3. **Contextual retrieval.** Prepend chunk-specific context to each passage *before*
    embedding it. Cheap, and one of the better-measured retrieval improvements available.
 4. **A real cross-encoder reranker.** Small `ms-marco-MiniLM`-class rerankers run on a

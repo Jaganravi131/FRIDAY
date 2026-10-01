@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from friday import doctor, serve
+from friday import doctor, paths, serve
 
 
 # ── doctor ─────────────────────────────────────────────────────────────────────
@@ -239,6 +239,91 @@ def test_gpu_info_never_raises_on_an_unusable_platform(monkeypatch):
     assert "vulkan_loader" in g and "amd" in g
 
 
+def test_doctor_root_argument_inspects_the_root_it_was_given(monkeypatch, tmp_path):
+    """⭐ `--root` must mean it. Three of the checks read the module-level `paths.*`
+    constants instead of the `root` argument, so passing a different root used to
+    produce a report about the WRONG directory while claiming to be about the one
+    requested — and `check_layout` crashed when the ambient root was missing a
+    directory the requested one had.
+
+    The silent wrong answer is the worse half. `friday doctor` is the first command
+    the deployment target runs, on a machine that is not the author's, so "I checked
+    your memory root and it is fine" while actually checking the repo checkout is the
+    kind of failure that gets believed.
+
+    Both roots exist here and only one is built, so a report about the wrong one is
+    unambiguously wrong rather than accidentally right.
+    """
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    built, unbuilt = tmp_path / "built", tmp_path / "unbuilt"
+    monkeypatch.setenv("FRIDAY_ROOT", str(built))
+    _seed(built)
+    paths.rebind(built)
+    paths.ensure_layout()
+    from friday.cli import main as cli
+    cli(["build"])                      # index the BUILT root only
+    unbuilt.mkdir(parents=True, exist_ok=True)
+    (unbuilt / "memory" / "facts").mkdir(parents=True, exist_ok=True)
+
+    by_built = {f.name: f for f in doctor.run(root=built).findings}
+    by_unbuilt = {f.name: f for f in doctor.run(root=unbuilt).findings}
+
+    assert by_built["Schema"].status == "ok", "the built root has a database"
+    assert "Derived index" in by_unbuilt, (
+        "the unbuilt root has no database — if this is missing the report described "
+        "the built root instead of the one requested"
+    )
+
+
+def test_doctor_restores_the_root_it_rebound(monkeypatch, tmp_path):
+    """`run()` is a library function. Rebinding global path state to inspect another
+    root is fine; leaving it rebound is not — a caller that inspects one root and then
+    writes memory would silently write into the inspected tree.
+    """
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / "memory" / "facts").mkdir(parents=True, exist_ok=True)
+    before = paths.ROOT
+    doctor.run(root=other)
+    assert paths.ROOT == before
+
+
+def test_a_crashed_check_names_itself(monkeypatch, tmp_path):
+    """The report must say WHICH check broke. The root-bound checks were wrapped in
+    lambdas and the crash path fell back to `fn.__name__`, so a real failure printed
+    `❌ <lambda>` above a ValueError about paths — a diagnostic that cannot name the
+    thing that broke is a diagnostic nobody can act on.
+    """
+    monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
+    monkeypatch.setattr(doctor, "check_store",
+                        lambda rep, root: (_ for _ in ()).throw(RuntimeError("boom")))
+    rep = doctor.run(root=tmp_path)
+    # Match the INJECTED error text, not the word "crashed". Substring-matching on a
+    # finding's detail is a trap here: details embed filesystem paths, and pytest
+    # derives tmp_path from the test's own NAME — so `test_a_crashed_check_names_itself`
+    # produces a directory containing "crashed", and the unrelated "Disk" finding (which
+    # reports the path it stat'd) matched the filter. A test that fails because of its
+    # own name is worth the comment.
+    crashed = [f for f in rep.findings if "boom" in f.detail]
+    assert crashed, "the deliberately broken check should have been reported"
+    assert len(crashed) == 1
+    assert crashed[0].name == "check_store"
+    assert not any(f.name == "<lambda>" for f in rep.findings), (
+        "a crashed check reported itself as <lambda> instead of by name"
+    )
+
+
+def test_rel_never_raises_on_a_path_outside_the_root(tmp_path):
+    """`Path.relative_to` raises instead of returning something usable. A report line
+    whose whole job is to say "this directory is missing" must not be able to take the
+    check down with it.
+    """
+    inside, outside = tmp_path / "a" / "b", tmp_path / "other" / "c"
+    assert doctor._rel(inside, tmp_path / "a") == "b"
+    assert doctor._rel(outside, tmp_path / "a") == str(outside)
+
+
 def test_doctor_runs_end_to_end_on_an_empty_root(monkeypatch, tmp_path):
     monkeypatch.setattr(doctor.shutil, "which", lambda _: None)
     rep = doctor.run(root=tmp_path)
@@ -299,10 +384,19 @@ def test_bench_runs_model_free_and_scores_the_known_defect(tmp_path):
     # Law 4 and Law 6 must hold even while recall is mediocre
     assert res.false_positive_rate == 0.0, "returning something for an unanswerable query"
     assert res.provenance_complete == 1.0, "a shipped fact without a quote breaks /why"
-    # Noun phrases work; natural language does not. This is the defect, measured.
+    # Noun phrases work. Natural questions now work too — that was the 37-point
+    # interrogative defect, closed by unifying the stopword lists (see
+    # tests/test_retrieval.py). The gap is asserted SMALL rather than merely absent
+    # so a regression in either direction is caught.
     assert res.by_class["noun"]["recall_at_5"] > 0.8
+    assert res.by_class["interrogative"]["recall_at_5"] > 0.8
+    assert res.interrogative_gap < 0.1, "natural questions must not retrieve worse than noun phrases"
+    # PARAPHRASE IS STILL THE KNOWN DEFECT, and it is not fixable by threshold.
+    # Lowering the floor to 0.25 lifts paraphrase to 0.25 and costs one false
+    # positive out of five unanswerable queries; it then plateaus at 0.25 no matter
+    # how low the floor goes. Law 4 and the gate both forbid that trade, so the only
+    # route to paraphrase recall is better signal — a real semantic embedder.
     assert res.by_class["paraphrase"]["recall_at_5"] < 0.3
-    assert res.interrogative_gap > 0.1
     assert res.seconds < 30
 
 

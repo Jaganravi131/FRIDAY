@@ -22,6 +22,15 @@ layer model-free, and the first baseline is uncomfortable:
 | interrogative | `what is my rent` | **0.545** |
 | paraphrase | `who do I report to` | **0.000** |
 
+> **Status of these numbers, 2026-10-01:** the interrogative row is historical and has
+> since been **fixed** — interrogative recall@5 is now 1.000, the gap is negative, and
+> overall recall@5 is 0.815. The cause was three disagreeing stopword lists, not model
+> capacity; see doc 15 lever 2 for the corrected diagnosis. The numbers below are left
+> as recorded because a ruling document is evidence of what was known when the ruling
+> was made, and silently editing it would misrepresent the review.
+> `false_positive_rate` = 0.0 and `provenance` = 1.0 both still hold, and the gate
+> enforces them.
+
 `interrogative_gap` = 0.371. `false_positive_rate` = 0.0 (Law 4 holds). `provenance` =
 1.0 (Law 6 holds).
 
