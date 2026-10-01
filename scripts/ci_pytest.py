@@ -34,6 +34,7 @@ command and silently swallows the rest of the message.
 """
 from __future__ import annotations
 
+import os
 import platform
 import re
 import subprocess
@@ -42,6 +43,29 @@ import sys
 #: Enough to see a pattern, few enough that a badly broken run does not bury the job in
 #: annotations. `--maxfail=5` bounds pytest anyway; this bounds the reporting.
 MAX_ANNOTATIONS = 25
+
+
+def _force_utf8() -> None:
+    """⭐ Make this script immune to the console's encoding.
+
+    Reproduced locally with `PYTHONIOENCODING=ascii`: the `·` in the environment
+    notice raised `UnicodeEncodeError`, the script died, and NOT ONE test failure was
+    reported — the diagnostic was killed by its own formatting. On a Windows runner the
+    console encoding is the OEM code page, and this repository's corpus is full of
+    characters that page does not have: `₹28,000`, em-dashes, `✓`, `❌`. A CI diagnostic
+    that works only where the alphabet is ASCII reports green on the platform that
+    actually ships, which is worse than no diagnostic at all.
+
+    `reconfigure` overrides PYTHONIOENCODING and the locale, which is the point: the
+    annotation channel must not depend on how the runner happened to be configured.
+    `errors="replace"` rather than "strict" because losing a glyph is acceptable and
+    losing the message is not.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass    # not a TextIOWrapper, or already detached — never fatal
 
 
 def _esc(text: str) -> str:
@@ -62,6 +86,7 @@ _FAILURE = re.compile(r"^(FAILED|ERROR)\s+(?P<node>\S+?)(?:\s+-\s+(?P<why>.+))?$
 
 
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8()
     args = list(argv) if argv is not None else ["tests/", "-q", "--maxfail=5", "-rf", "--tb=line"]
 
     # Platform facts first, as a notice: when a suite passes on one OS and fails on
@@ -74,12 +99,13 @@ def main(argv: list[str] | None = None) -> int:
           f"{__import__('sqlite3').sqlite_version}",
           title="environment")
 
+    # The child must also emit UTF-8, or `capture_output` receives mojibake that then
+    # goes into the annotation and cannot be read back.
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
     proc = subprocess.run([sys.executable, "-m", "pytest", *args],
-                          capture_output=True, text=True, encoding="utf-8", errors="replace")
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          env=env)
     out = (proc.stdout or "") + (proc.stderr or "")
-    # The full output still goes to the log for anyone who CAN read it. This script adds
-    # a channel; it does not replace one.
-    print(out, flush=True)
 
     failures: list[tuple[str, str]] = []
     for line in out.splitlines():
@@ -104,6 +130,17 @@ def main(argv: list[str] | None = None) -> int:
         tail = "\n".join(out.splitlines()[-15:])
         _emit("error", tail or f"pytest exited {proc.returncode} with no parseable summary",
               title=f"pytest exited {proc.returncode} without a test-failure summary")
+
+    # ⭐ The full output goes to the log LAST, and guarded. Ordering is the whole fix:
+    # echoing the log first meant an encoding failure in the echo suppressed every
+    # annotation, so the job reported "failed" with no reason attached. The channel that
+    # exists for restricted networks must not depend on the channel restricted networks
+    # cannot read.
+    try:
+        print(out, flush=True)
+    except Exception as e:                       # never let the echo eat the diagnosis
+        _emit("warning", f"could not echo the pytest log: {type(e).__name__}: {e}",
+              title="log echo failed")
 
     return proc.returncode
 
