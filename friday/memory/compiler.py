@@ -120,6 +120,43 @@ def _record_origin(conn: sqlite3.Connection, path: Path, fhash: str, n: int) -> 
         pass
 
 
+def _citation(fl) -> str | None:
+    """⭐ What `/why` shows for a Markdown-derived fact when the file carries no
+    explicit quote.
+
+    A facts file records a quote only in a `<!-- src: … "the literal words" -->`
+    annotation. Everything else — hand-typed bullets, imported lines, all of
+    `friday seed` — was compiled with `source_quote = NULL`, so the fact reached the
+    store with `origin_file` and `origin_line` but nothing to show a human who asked
+    where it came from. On a fresh install that was **15 of 16 seeded facts**: the
+    first command a new user runs built a memory that could not cite 94% of itself,
+    and `/why` is the single thing the whole trust model rests on.
+
+    The evidence was never missing. `FactLine.raw` already holds the line the fact was
+    parsed from and `_parse_one` is handed it; it simply was not used as the citation.
+
+    The raw line is returned VERBATIM, meta tail and all. A citation that has been
+    tidied up is not a citation — the point is that the user can open the file at that
+    line and see exactly these characters.
+
+    ⚠️ Deliberately NOT used for the search body or for RSC supervision spans, which
+    keep testing `fl.source_quote` directly:
+      * the body already contains the predicate and object, so indexing the line again
+        would double-weight exactly the tokens that matched and would move every
+        retrieval score for a reason that has nothing to do with ranking;
+      * a supervision span says "this span of an utterance produced this fact", and a
+        Markdown bullet is an ASSERTION, not an utterance. Feeding 15 synthetic bullets
+        to the write gate w_t would teach it that bullet syntax is evidence of a user
+        having said something.
+    A citation answers "where did this come from?". Those two answer different
+    questions and must not be collapsed into one field.
+    """
+    if fl.source_quote and fl.source_quote.strip():
+        return fl.source_quote
+    raw = (getattr(fl, "raw", "") or "").strip()
+    return raw or None
+
+
 def compile_file(path: Path, conn: sqlite3.Connection, *, embedder=None) -> int:
     """Parse one Markdown facts file -> upsert rows. Returns count written.
 
@@ -186,7 +223,7 @@ def compile_file(path: Path, conn: sqlite3.Connection, *, embedder=None) -> int:
                 float(conf), 0.5, fl.valid_from, fl.valid_to, asserted,
                 _iso(fl.retracted_at) if fl.retracted else None,
                 fl.superseded_by, source_kind,
-                json.dumps(fl.source_refs or []), fl.source_quote, None,
+                json.dumps(fl.source_refs or []), _citation(fl), None,
                 0, None, str(path), fhash, fl.lineno,
             ),
         )

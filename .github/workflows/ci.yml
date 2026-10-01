@@ -50,7 +50,21 @@ jobs:
         run: python -c "import friday, friday.cli, friday.agent.loop, friday.ledger.compiler, friday.memory.compiler, friday.retrieval.pipeline, friday.security; print('stdlib-only core OK')"
 
       - name: Test suite
-        run: python -m pytest tests/ -q --maxfail=5
+        # Run through scripts/ci_pytest.py rather than invoking pytest directly. Same
+        # tests, same exit code — but failures are also emitted as `::error::` workflow
+        # commands, which the runner stores as check-run ANNOTATIONS. Annotations are
+        # served by api.github.com; job logs are served by
+        # results-receiver.actions.githubusercontent.com and artifacts by
+        # pipelines.actions.githubusercontent.com. From a network that can only reach the
+        # API, a red Windows job is otherwise completely undiagnosable: `gh run view
+        # --log` returns a TLS EOF and the only visible fact is that it failed.
+        #
+        #   gh api repos/{owner}/{repo}/check-runs/{job_id}/annotations
+        #
+        # It also makes the platform legible, which is the whole point of the matrix:
+        # Windows is the primary deployment target, so a failure that can only be read
+        # on Linux is a failure that cannot be acted on.
+        run: python scripts/ci_pytest.py
 
       - name: Phase 0 exit gate
         # Conditions 11 and 2 SKIP here (they need a real model and an hour of wall

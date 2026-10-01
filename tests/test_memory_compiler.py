@@ -161,3 +161,110 @@ def test_compile_errors_do_not_abort_the_build(seeded, root):
     stats = compiler.compile_all(conn)
     assert stats.files >= 4
     assert stats.facts > 0
+
+
+# ── provenance: every compiled fact must be citable ───────────────────────────
+
+
+def test_every_compiled_markdown_fact_is_citable(seeded):
+    """⭐ A fact that cannot say where it came from cannot be trusted, and `/why` is
+    the single thing the whole trust model rests on.
+
+    A facts file recorded a quote only in an explicit `<!-- src: … "the words" -->`
+    annotation, so every plain bullet compiled to `source_quote = NULL` — **15 of the
+    16 facts `friday seed` writes**. The first command a new user runs therefore built
+    a memory that could not cite 94% of itself. It stayed invisible for a long time
+    because the uncitable facts ranked below the retrieval floor; unifying the stopword
+    lists lifted one of them to rank 1 and Phase 0 exit condition #2 ("tell it a fact
+    Monday, ask a follow-up Friday") failed on *"recalled but WITHOUT a usable
+    citation"*. The gate was right and the data path was wrong.
+
+    The evidence was never missing — `FactLine.raw` already held the source line. This
+    asserts the invariant, not the mechanism, so it holds for any future fact source.
+    """
+    conn, _ = seeded
+    rows = conn.execute(
+        "SELECT id, source_quote, origin_file, origin_line FROM facts").fetchall()
+    assert rows, "the seed corpus must produce facts for this to mean anything"
+    uncitable = [r["id"] for r in rows if not (r["source_quote"] and r["origin_file"])]
+    assert not uncitable, (
+        f"{len(uncitable)}/{len(rows)} compiled facts cannot be cited by /why: {uncitable[:6]}"
+    )
+
+
+def test_the_citation_is_the_verbatim_line_and_an_explicit_quote_still_wins(seeded, root):
+    """Two properties of the fallback, both of which are easy to get subtly wrong.
+
+    VERBATIM: a citation is only worth anything if the user can open the file at that
+    line and see exactly those characters — including the `[id · kind · conf]` meta
+    tail. Tidying it up would make it a paraphrase of the evidence rather than the
+    evidence, which is the failure mode the whole provenance design exists to prevent.
+
+    PRECEDENCE: an explicit annotation records what the user actually SAID, which is
+    stronger evidence than the bullet someone later wrote about it. The fallback must
+    fill a gap, never overwrite one.
+    """
+    from friday.memory import compiler
+
+    conn, _ = seeded
+    f = root / "memory" / "facts" / "citation.md"
+    f.write_text(
+        "---\ndomain: citation\nversion: 1\n---\n\n# Citation\n\n"
+        "- plain: **taken from its own line** [f_cite001 · stated · conf 0.9]\n"
+        "- annotated: **taken from what was said** [f_cite002 · stated · conf 0.9]\n"
+        "  <!-- src: chat:2026-09-30 \"I said this in chat, not in this file\" -->\n",
+        encoding="utf-8")
+    compiler.compile_file(f, conn)
+    conn.commit()
+
+    by = {r["id"]: r["source_quote"] for r in conn.execute(
+        "SELECT id, source_quote FROM facts WHERE id IN ('f_cite001','f_cite002')")}
+
+    assert by["f_cite001"] == "- plain: **taken from its own line** [f_cite001 · stated · conf 0.9]", (
+        "the fallback citation must be the raw line, character for character"
+    )
+    assert by["f_cite002"] == "I said this in chat, not in this file", (
+        "an explicit quote is stronger evidence than the bullet and must not be replaced"
+    )
+
+
+def test_the_citation_fallback_does_not_leak_into_retrieval_or_supervision(seeded, root):
+    """The fallback answers "where did this come from?" — it must not also change how
+    well a fact is FOUND, or what the RSC write gate is trained on.
+
+    Both would be silent, and both would be bad. Indexing the raw line would
+    double-weight the predicate and object tokens that already matched, moving every
+    retrieval score for a reason unrelated to ranking. And a supervision span asserts
+    "this span of an UTTERANCE produced this fact"; a Markdown bullet is an assertion,
+    not an utterance, so feeding synthetic bullets to w_t would teach it that bullet
+    syntax is evidence a user said something.
+    """
+    from friday.memory import compiler, supervision
+
+    conn, _ = seeded
+    before_fts = conn.execute("SELECT COUNT(*) AS n FROM memory_fts").fetchone()["n"]
+    before_spans = conn.execute(
+        "SELECT COUNT(*) AS n FROM supervision_spans").fetchone()["n"]
+
+    f = root / "memory" / "facts" / "leakcheck.md"
+    f.write_text(
+        "---\ndomain: leakcheck\nversion: 1\n---\n\n# Leakcheck\n\n"
+        "- unquoted: **a fact with no annotation at all** [f_leak001 · stated · conf 0.9]\n",
+        encoding="utf-8")
+    compiler.compile_file(f, conn)
+    conn.commit()
+
+    assert conn.execute("SELECT source_quote FROM facts WHERE id='f_leak001'"
+                        ).fetchone()["source_quote"], "the fact itself must be citable"
+    # the raw line is NOT indexed as extra search text: one fact adds exactly one row
+    after_fts = conn.execute("SELECT COUNT(*) AS n FROM memory_fts").fetchone()["n"]
+    assert after_fts == before_fts + 1, (
+        f"indexing the fallback citation would change retrieval scores: {before_fts} -> {after_fts}"
+    )
+    # and it is NOT recorded as an utterance span for the write gate
+    after_spans = conn.execute(
+        "SELECT COUNT(*) AS n FROM supervision_spans").fetchone()["n"]
+    assert after_spans == before_spans, (
+        "a Markdown bullet is an assertion, not an utterance; it must not supervise w_t"
+    )
+    assert supervision is not None

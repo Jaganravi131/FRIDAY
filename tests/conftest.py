@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,12 @@ if str(REPO) not in sys.path:
 # developer's working tree. The per-test `root` fixture below then rebinds to an
 # isolated tmp_path, and `paths.rebind` re-points modules already holding a
 # reference. Belt and braces: neither alone is sufficient.
-_BOOT_ROOT = Path(os.environ.get("FRIDAY_ROOT") or "/tmp/friday-collection-root")
+# `tempfile.gettempdir()`, NOT "/tmp". Windows is the primary deployment platform and
+# the CI matrix runs it; "/tmp/friday-collection-root" becomes C:\tmp\... there, which
+# only exists if something already created it and the runner may write to the drive root.
+# A collection-time scratch directory has no reason to be pinned to a POSIX path.
+_BOOT_ROOT = Path(os.environ.get("FRIDAY_ROOT")
+                  or str(Path(tempfile.gettempdir()) / "friday-collection-root"))
 os.environ["FRIDAY_ROOT"] = str(_BOOT_ROOT)
 
 

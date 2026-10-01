@@ -367,7 +367,13 @@ def check_store(rep: Report, root: Path) -> None:
                 "Run `python -m friday build`. Markdown is truth; this is rebuildable.")
         return
     try:
-        conn = sqlite3.connect(f"file:{paths.DB_PATH}?mode=ro", uri=True)
+        # ⭐ `Path.as_uri()`, not an f-string. SQLite URI filenames are URIs, so an
+        # absolute path must be `file:///...` with forward slashes; on Windows the
+        # naive form produced `file:C:\Users\...\friday.db?mode=ro`, which SQLite
+        # cannot resolve to an absolute path — and Windows is the primary deployment
+        # platform, so the machine that most needs this check was the one it broke on.
+        # as_uri() also percent-encodes, which makes "C:\Users\John Doe\..." work.
+        conn = sqlite3.connect(f"{paths.DB_PATH.as_uri()}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         facts = conn.execute("SELECT count(*) AS n FROM facts").fetchone()["n"]
         live = conn.execute(
