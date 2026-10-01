@@ -85,7 +85,20 @@ class SyncReport:
 
 
 def _hash(p: Path) -> str:
-    return hashlib.sha256(p.read_bytes()).hexdigest()
+    """Hash the file the way the COMPILER hashes it: as decoded text, not raw bytes.
+
+    `origin_hash` is the identity of "what FRIDAY derived this content from", so it
+    must be stable across a write→read round trip. `compiler.compile_file` stores
+    `sha256(text.encode())` where `text = path.read_text(encoding="utf-8")` — the
+    parser's view. If the watcher instead hashed `read_bytes()`, the two would
+    diverge on Windows, where text-mode write translates `\n` to `\r\n`: the fact
+    FRIDAY just asserted is fingerprinted on logical text, the file on disk carries
+    CRLF, and `stale_fact_files` reports an up-to-date file as edited. That is
+    exactly the Windows-only failure in CI — green on POSIX because no translation
+    happens there. Decoding first makes the hash a property of the content, not of
+    the line-ending convention of the OS that happened to write it.
+    """
+    return hashlib.sha256(p.read_text(encoding="utf-8").encode("utf-8")).hexdigest()
 
 
 def _fact_files() -> list[Path]:
