@@ -421,3 +421,69 @@ def test_a_nonsense_query_does_not_raise(facts):
 def test_k_ship_caps_the_result_even_when_more_clear_the_floor(facts):
     r = _search(facts, "user", k_wide=20, k_ship=1, floor=0.0)
     assert len(r.kept) <= 1
+
+
+# ── logs must not outrank the beliefs they recorded ───────────────────────────
+
+
+def test_a_record_that_only_echoes_the_query_is_not_an_answer(facts):
+    """⭐ AN ANSWER MUST ADD INFORMATION THE QUESTION DID NOT HAVE.
+
+    Found live, not constructed. FRIDAY indexes conversation traces so "what did I ask
+    yesterday" is answerable. Asking "who is my landlord" a second time retrieved the
+    trace of the first time asking it — body exactly the query, coverage 1.0, score
+    ~0.98 — above the fact, whose body is longer and so scores lower on the overlap
+    term. The agent ships only facts, so it saw its top slots filled with logs of the
+    user's own question and answered *"I don't have anything in memory about that"* for
+    a fact it had. A perfect score, earned by containing nothing.
+
+    Demoted rather than dropped: it WAS recalled, and `considered` has to stay honest or
+    the funnel becomes unreadable.
+    """
+    from friday.store import db
+
+    db.fts_upsert(facts, "trace:t_echo", "daily", "who is my landlord")
+    r = _search(facts, "who is my landlord", floor=0.45)
+    refs = [c.ref for c in r.kept]
+    assert "trace:t_echo" not in refs, (
+        "a recording of the question was shipped as an answer to it"
+    )
+    assert any(c.is_fact for c in r.kept), "the real fact must still be shipped"
+    assert r.considered >= 1, "the echo was recalled; it just must not be shipped"
+
+
+def test_a_fact_outranks_the_trace_that_recorded_it(facts):
+    """⭐ The bias here is STRUCTURAL, so it needs a prior rather than better tuning.
+
+    A trace records a write, so its body is a short restatement of the fact it wrote —
+    `landlord=Ramesh` for the fact `landlord name Ramesh`. The reranker's overlap term
+    divides by the union of query and candidate words, so the shorter body scores higher
+    on the same match, every time. Measured before the fix: trace 0.759 against fact
+    0.746. Every fact has a shadow that beats it by construction.
+
+    The ordering is by what a kind can WARRANT: only a fact is bi-temporal, carries
+    provenance and can be justified by `/why`.
+    """
+    from friday.store import db
+
+    db.fts_upsert(facts, "trace:t_shadow", "daily", "landlord=Ramesh")
+    r = _search(facts, "who is my landlord", floor=0.45)
+    assert r.kept, "something must be shipped"
+    assert r.kept[0].is_fact, (
+        f"the log of a write outranked the belief it recorded: "
+        f"{[(c.kind, round(c.score, 3)) for c in r.kept[:3]]}"
+    )
+
+
+def test_the_kind_prior_does_not_make_logs_unreachable(facts):
+    """The other side of the prior. A fact weight of 1.0 everywhere else would be a lie
+    in the opposite direction: "what did I ask yesterday" is answerable ONLY from logs,
+    and those must still clear the floor when nothing else matches.
+    """
+    from friday.store import db
+
+    db.fts_upsert(facts, "trace:t_asked", "daily", "asked about the notice period yesterday")
+    r = _search(facts, "what did I ask about the notice period", floor=0.45)
+    assert any(c.ref == "trace:t_asked" for c in r.kept), (
+        "demoting logs must not make the history of what was asked unanswerable"
+    )

@@ -369,10 +369,15 @@ def search(
     # rerank on real text
     texts = [_rerank_text(c) for c in merged]
     scores = rr.score(q, texts) if texts else []
-    for c, s in zip(merged, scores):
+    q_words = set(_content_words(q))
+    for c, s, text in zip(merged, scores, texts):
         # a multi-path recall is weak corroborating evidence; nudge, don't dominate
         c.score = min(1.0, s * (1.0 + 0.06 * (len(c.recall_sources) - 1)))
+        c.score *= KIND_PRIOR.get(c.kind, DEFAULT_KIND_PRIOR)
+        if _is_echo(text, q_words):
+            c.score *= ECHO_PENALTY
 
+    _suppress_redundant(merged, texts)
     merged.sort(key=lambda c: -c.score)
 
     kept: list[Candidate] = []
@@ -404,6 +409,113 @@ def search(
         kept=kept, considered=len(merged), floor=effective_floor, reranker=rr.name,
         as_of=as_of, dropped_below_floor=below, dropped_stale=stale,
     )
+
+
+#: ⭐ How hard to demote a candidate that merely echoes the query. 0.25 puts a
+#: perfect lexical match (score ~0.98) below the 0.45 floor, so an echo is not shipped
+#: but is still counted in `considered` — it was recalled, and pretending otherwise
+#: would make the funnel unreadable.
+ECHO_PENALTY = 0.25
+
+#: ⭐ Kind prior: THE CURRENT BELIEF OUTRANKS THE LOG OF HOW WE CAME TO BELIEVE IT.
+#:
+#: This corrects a structural bias, not a tuned preference. A trace records a write, so
+#: its body is a short restatement of the fact it wrote — `standup_day=Tuesday 10:00 IST`
+#: for the fact `standup_day Tuesday 10:00 IST`. The reranker's overlap term divides by
+#: the union of query and candidate words, so the SHORTER body always scores higher on
+#: the same match. Measured live: trace 0.759 against fact 0.746 for "when is my
+#: standup". Every fact therefore has a shadow that beats it by construction, and the
+#: agent — which ships only facts, because only facts are bi-temporal, carry provenance
+#: and can be justified by `/why` — saw its top slots filled with logs and answered
+#: *"I don't have anything in memory about that"* for a fact it had.
+#:
+#: The ordering is by what each kind can WARRANT, not by how well it matches:
+#:   fact    1.00  the answer-bearing kind; `/why` can show its source quote
+#:   skill   0.95  a procedure — the answer to "how do I …"
+#:   episode 0.90  narrative context; supports "what happened", not "what is true"
+#:   daily   0.90  a log of activity, including of questions asked
+#: These priors are GENTLE on purpose, and they are not what fixes the duplicate-trace
+#: problem. Calibrating them to do that needs daily ~0.72, because a fact's rerank text
+#: carries its aliases and its own source quote — `name: Ramesh (called, who is, full
+#: name) "my landlord is called Ramesh"` scores 0.725 against a bare `landlord=Ramesh`
+#: trace scoring a capped 1.000. A fact is penalised for carrying MORE evidence, and the
+#: only way to out-prior that is to push logs below the floor, which would make "what
+#: did I ask yesterday" unanswerable. `_suppress_redundant` below is the fix that does
+#: not require choosing between those two.
+KIND_PRIOR = {"fact": 1.0, "skill": 0.95, "episode": 0.92, "daily": 0.90}
+DEFAULT_KIND_PRIOR = 0.90
+
+
+#: A non-fact that says nothing a fact in the same result set does not already say.
+#: 0.5 takes a capped 1.000 trace to 0.45 after the 0.90 kind prior — i.e. off the
+#: shipping list — while leaving a trace that carries unique information untouched.
+REDUNDANT_PENALTY = 0.5
+
+
+def _suppress_redundant(merged: list, texts: list[str]) -> None:
+    """⭐ Demote a candidate that duplicates a fact already in the result set.
+
+    A trace records a write, so its body is a restatement of the fact it wrote:
+    `standup_day=Tuesday 10:00 IST` for the fact `standup_day Tuesday 10:00 IST`. Two
+    consequences follow, and the second is the one that breaks things:
+
+      * the trace's body is SHORTER, and the reranker's overlap term divides by the
+        union of query and candidate words, so the trace scores higher on the same
+        match — a fact is penalised for carrying aliases and a source quote;
+      * the agent ships only facts, so a top-k filled with a fact's own shadows leaves
+        nothing shippable and the answer becomes *"I don't have anything in memory"*.
+
+    So the rule is not "logs are worse than beliefs". It is: DO NOT SHIP THE SAME
+    INFORMATION TWICE, and when a choice is unavoidable, ship the copy that carries
+    provenance — because that is the one `/why` can justify.
+
+    Subset-of-words is deliberately a weak, conservative test. It only fires when a fact
+    in THIS result set already says everything the candidate says, so a log with any
+    unique content ("asked about the notice period yesterday") is untouched and history
+    stays answerable.
+    """
+    fact_words = [set(_content_words(t)) for c, t in zip(merged, texts) if c.is_fact]
+    if not fact_words:
+        return
+    for c, t in zip(merged, texts):
+        if c.is_fact:
+            continue
+        w = set(_content_words(t))
+        if w and any(w <= fw for fw in fact_words):
+            c.score *= REDUNDANT_PENALTY
+
+
+def _is_echo(text: str, q_words: set[str]) -> bool:
+    """⭐ True when `text` contains no content word the query did not already contain.
+
+    AN ANSWER MUST ADD INFORMATION THE QUESTION DID NOT HAVE. A record whose entire
+    content is the question is not a candidate answer, it is a recording of someone
+    asking — and it matches that question perfectly, which is exactly why it is
+    dangerous.
+
+    Found live: FRIDAY indexes conversation traces so "what did I ask yesterday" is
+    answerable. Asking "when is my standup" a second time retrieved the trace of the
+    FIRST time asking it — body `'when is my standup'`, coverage 1.0, score 0.979 —
+    above the `standup_day` fact, whose body is longer and therefore scores lower on
+    overlap. The agent ships only facts, so it saw the top slots filled with logs of
+    the user's own question, found no fact among them, and answered *"I don't have
+    anything in memory about that"* for a fact it had. A perfect score, earned by
+    containing nothing.
+
+    This is scorer-independent and so lives in the pipeline rather than in
+    `LexicalReranker`: a cross-encoder would make the same mistake more confidently,
+    because an embedding of a question is very close to an embedding of itself.
+
+    Facts are structurally immune, which is why this does not need a per-kind prior:
+    a fact's text is `predicate object`, so it always contributes at least the
+    predicate. What gets caught is logs, echoes and headings. Note the trace
+    `'standup day: Tuesday 10:00 IST'` is NOT an echo — it answers the question — and
+    keeps its score.
+    """
+    if not q_words:
+        return False
+    body = set(_content_words(text))
+    return bool(body) and body <= q_words
 
 
 def _rerank_text(c: Candidate) -> str:
