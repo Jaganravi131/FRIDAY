@@ -110,6 +110,68 @@ def _is_blocked_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
     return ""
 
 
+def _literal_ip(host: str):
+    """Parse `host` as a numeric IP LITERAL, or return None if it is a real name.
+
+    Python's `ipaddress.ip_address` accepts only canonical forms (dotted-quad,
+    full IPv6). Browsers and sockets also accept the historical inet_aton shapes —
+    `127.1` (short), `0x7f.0.0.1` (hex), `2130706433` (a single 32-bit number),
+    `0177.0.0.1` (octal) — and an attacker reaches for exactly those, because they
+    slip past string matching. The guard's whole point is to catch them by IP, so it
+    must parse them itself rather than trusting the OS resolver: `socket.getaddrinfo`
+    handles these differently per platform (glibc expands them; Windows returns
+    getaddrinfo failure), and a guard that is correct only on glibc is a guard that
+    fails open on the machine FRIDAY is deployed to. Returns an IPv4/IPv6Address on
+    match, else None to mean "this is a DNS name, resolve it".
+    """
+    h = (host or "").strip()
+    if not h:
+        return None
+    # IPv6 literal (already bracketed off by urlsplit); let the stdlib parse it,
+    # catching ::1 and the ::ffff:127.0.0.1 disguise.
+    if ":" in h:
+        try:
+            return ipaddress.ip_address(h)
+        except ValueError:
+            return None
+    # Canonical or shrunken dotted-quad / hex / octal IPv4.
+    parts = h.split(".")
+    if len(parts) > 4 or any(p == "" for p in parts):
+        return None
+    nums = []
+    for part in parts:
+        try:
+            if part.lower().startswith("0x"):
+                n = int(part, 16)
+            elif len(part) > 1 and part.startswith("0"):
+                n = int(part, 8)            # leading 0 => octal in inet_aton
+            else:
+                n = int(part, 10)
+        except ValueError:
+            return None                        # a letter or '_' => a DNS name
+        nums.append(n)
+    # inet_aton packing: 1 number is the whole 32-bit word; otherwise all parts but
+    # the last are one byte each and the last is the remaining (5-len)*8 bits.
+    if len(nums) == 1:
+        value = nums[0]
+        if value >= (1 << 32):
+            return None
+    else:
+        if any(n > 0xFF for n in nums[:-1]):
+            return None
+        last_bits = 8 * (5 - len(nums))
+        if nums[-1] >= (1 << last_bits):
+            return None
+        value = 0
+        for n in nums[:-1]:
+            value = (value << 8) | n
+        value = (value << last_bits) | nums[-1]
+    try:
+        return ipaddress.IPv4Address(value)
+    except ipaddress.AddressValueError:
+        return None
+
+
 def validate_url(url: str, *, allow_private: bool = False) -> Verdict:
     """Is this URL safe to fetch? Resolves the host, so it catches IP-literal tricks
     (`http://127.1`, `http://0x7f.0.0.1`, `http://[::1]`) that string matching misses.
@@ -132,6 +194,18 @@ def validate_url(url: str, *, allow_private: bool = False) -> Verdict:
     # Credentials in a URL are a phishing shape and never needed here.
     if p.username or p.password:
         return Verdict(False, "URL contains credentials", raw)
+
+    # An IP literal is judged AS the IP — no DNS involved. This both reports the
+    # truthful reason and makes the guard platform-independent: getaddrinfo expands
+    # shorthand/hex/octal forms on glibc but rejects them on Windows, so a literal
+    # that a socket would happily connect to MUST be classified by parsing it, not by
+    # asking DNS (which on Windows answers "resolution failed" and hides 'loopback').
+    lit = _literal_ip(p.hostname)
+    if lit is not None:
+        why = _is_blocked_ip(lit)
+        if why and not allow_private:
+            return Verdict(False, f"{p.hostname} is {lit}: {why}", raw, str(lit))
+        return Verdict(True, "", raw, str(lit))
 
     try:
         infos = socket.getaddrinfo(p.hostname, p.port or (443 if p.scheme == "https" else 80),
