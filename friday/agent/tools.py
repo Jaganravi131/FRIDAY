@@ -15,6 +15,7 @@ so this tool is the only exact memory FRIDAY has (Law 2b).
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 import urllib.parse
@@ -252,7 +253,16 @@ def read_artifact(ctx: ToolContext, name: str, max_tokens: int = 2000) -> dict:
         return {"error": f"unreadable artifact name: {e}"}
     # Containment AFTER resolution: catches both traversal that survived .name and a
     # symlink whose target lives outside the offload directory.
-    if real != p or not str(real).startswith(str(root) + "/") and real != root:
+    #
+    # Containment ONLY — NOT `real != p`. On Windows, `Path.resolve()` is allowed to
+    # return a different form than its input (the 8.3-short-name RUNNER~1 vs
+    # runneradmin case in CI), so p and real can be the SAME file yet compare unequal.
+    # Asserting identity turns that platform quirk into a refusal to read legitimate
+    # artifacts. What a hostile symlink actually needs is for real to leave root, and
+    # that is exactly what startswith detects — on every OS.
+    root_s = str(root)
+    real_s = str(real)
+    if not (real_s == root_s or real_s.startswith(root_s + os.sep)):
         return {"error": "artifact path escapes the offload directory"}
     if not real.is_file():                            # not exists(): a directory is not a file
         return {"error": f"no offloaded artifact named '{safe}'"}

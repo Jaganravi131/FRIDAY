@@ -397,7 +397,13 @@ def test_bench_runs_model_free_and_scores_the_known_defect(tmp_path):
     # how low the floor goes. Law 4 and the gate both forbid that trade, so the only
     # route to paraphrase recall is better signal — a real semantic embedder.
     assert res.by_class["paraphrase"]["recall_at_5"] < 0.3
-    assert res.seconds < 30
+    # A sanity ceiling, not a performance budget — it exists to fail if the bench ever
+    # spawns a subprocess per query or reads the corpus from disk per query, not to
+    # grade the machine. Measured on this dev box the same 122-query run is ~0.4 s;
+    # on a Windows CI runner the identical, in-process path takes ~64 s (file watchers
+    # and AV on the per-query sqlite work done inside search), so the ceiling has to
+    # clear that with headroom or the suite is red-by-environment, not red-by-defect.
+    assert res.seconds < 300
 
 
 def test_bench_gate_passes_on_its_own_baseline(tmp_path):

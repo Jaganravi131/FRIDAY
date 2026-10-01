@@ -28,6 +28,13 @@ def test_the_rebuild_property(seeded, root):
     assert before, "seeded housing.md should answer a rent query"
     before_val = before.kept[0].row["object"]
 
+    # ⭐ Close before deleting: a file that is still open CANNOT be unlinked on
+    # Windows (WinError 32) — POSIX removes it silently, which is why this test was
+    # green on the machine it was written on and red in the Windows CI job. The
+    # seeded conn is the fixture's; giving it back before the file goes matters
+    # only on Windows, and costs nothing anywhere else.
+    conn.close()
+
     # delete every artifact
     for p in (root / "artifacts").rglob("*"):
         if p.is_file():
@@ -36,12 +43,16 @@ def test_the_rebuild_property(seeded, root):
 
     from friday.store import db
     conn2 = db.connect(root / "artifacts" / "friday.db")
-    stats = compiler.compile_all(conn2)
-    assert stats.facts > 0
+    try:
+        stats = compiler.compile_all(conn2)
+        assert stats.facts > 0
 
-    after = search(conn2, "what is my monthly rent")
-    assert after, "rebuild must restore the rent fact"
-    assert after.kept[0].row["object"] == before_val
+        after = search(conn2, "what is my monthly rent")
+        assert after, "rebuild must restore the rent fact"
+        assert after.kept[0].row["object"] == before_val
+    finally:
+        conn2.close()  # same rule: the temp root is removed on teardown, so this handle
+                       # must not still be holding friday.db open when pytest cleans up
 
 
 def test_incremental_recompile_skips_unchanged(seeded, root):

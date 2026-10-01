@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
@@ -64,6 +65,26 @@ class CompileStats:
 
 # ── facts ──────────────────────────────────────────────────────────────────────
 
+def _norm_file_key(s: str) -> str:
+    """Collapse an `origin_file` path string for COMPARISON only.
+
+    The DB always stores the human-readable `str(path)` — the audit trail must show
+    the path the user recognises, original case and separators included. But Windows
+    supplies mixed separators and case (and, on machine-permuted temp dirs, mixed
+    8.3-short-name forms) for the same file, so comparing stored against discovered
+    with plain equality is flaky there and only there: a stored `...\\Temp\\...`
+    `runneradmin` key fails to match a `rglob`-provided `C:\\Temp\\RUNNER~1\\...`
+    form. Normalising both sides to one case and one separator gives a single
+    comparison key per file while leaving the displayed path untouched. On POSIX
+    `os.sep` is `/`, forward-slash-collapse is a no-op, and lowering case is a no-op
+    for real paths because POSIX filesystems are case-sensitive — the key there is
+    effectively `str(path)` as before, so the loop-safety properties the tests pin
+    are unchanged.
+    """
+    s = s.replace("/", "\\") if os.sep == "\\" else s
+    return s.lower() if os.sep == "\\" else s
+
+
 def _origin_hash_matches(conn: sqlite3.Connection, path: Path, fhash: str) -> bool:
     """Has this exact content already been accounted for, by either record?
 
@@ -81,19 +102,21 @@ def _origin_hash_matches(conn: sqlite3.Connection, path: Path, fhash: str) -> bo
     A file FRIDAY just wrote matches on `facts`; a notes-only file matches on
     `origin_state`; a genuine hand-edit matches on neither.
     """
+    want = _norm_file_key(str(path))
     try:
-        row = conn.execute(
-            "SELECT origin_hash FROM origin_state WHERE origin_file=?", (str(path),)
-        ).fetchone()
-        if row is not None and row["origin_hash"] == fhash:
-            return True
+        for r in conn.execute("SELECT origin_file, origin_hash FROM origin_state"):
+            if _norm_file_key(r["origin_file"]) == want and r["origin_hash"] == fhash:
+                return True
     except sqlite3.OperationalError:            # table not created yet
         pass
-    row = conn.execute(
-        "SELECT COUNT(*) AS n FROM facts WHERE origin_file=? AND origin_hash=?",
-        (str(path), fhash),
-    ).fetchone()
-    return bool(row and row["n"] > 0)
+    # Index the hash, not the path: the path comparison is norm'd in Python, but the
+    # hash is exact, so `WHERE origin_hash=?` keeps this an indexed probe rather than
+    # a full table scan. Only rows already matching on content reach the key compare.
+    for r in conn.execute(
+            "SELECT origin_file, origin_hash FROM facts WHERE origin_hash=?", (fhash,)):
+        if _norm_file_key(r["origin_file"]) == want:
+            return True
+    return False
 
 
 def _record_origin(conn: sqlite3.Connection, path: Path, fhash: str, n: int) -> None:
