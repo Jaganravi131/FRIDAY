@@ -69,7 +69,13 @@ jobs:
       - name: Phase 0 exit gate
         # Conditions 11 and 2 SKIP here (they need a real model and an hour of wall
         # clock, plus a phone on a tailnet). The other ten must pass, and the script
-        # exits nonzero on any FAIL.
+        # exits nonzero on any FAIL. PYTHONUTF8 matters on Windows: the report prints
+        # ✅/❌/✋, and without UTF-8 mode stdout is cp1252 and the first status line
+        # raises UnicodeEncodeError — a red step with no test failure in it. FAILs are
+        # also emitted as annotations by the script itself, so they stay readable from
+        # networks that can only reach the API.
+        env:
+          PYTHONUTF8: "1"
         run: python scripts/phase0_exit_test.py
 
   hygiene:

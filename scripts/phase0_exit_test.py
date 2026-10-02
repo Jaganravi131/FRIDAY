@@ -596,7 +596,34 @@ CHECKS = [check_1_rebuild, check_2_monday_friday, check_3_why, check_4_does_not_
           check_11_rss, check_12_phone]
 
 
+def _wf(kind: str, title: str, msg: str) -> None:
+    """Emit a GitHub workflow command (::error::/::notice::), so this gate's failures
+    become check-run ANNOTATIONS. Same reason scripts/ci_pytest.py exists: job logs
+    are served by hosts a restricted network cannot reach, while annotations come from
+    api.github.com. A red gate nobody can read the cause of is a gate that gets
+    bypassed. No-op outside Actions — the escape sequences would be noise on a desk.
+    """
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return
+    title = (title.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+                  .replace(":", "%3A").replace(",", "%2C"))
+    msg = msg.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{kind} title={title}::{msg}")
+
+
 def main(argv: list[str] | None = None) -> int:
+    # The report uses ✅ ❌ ⏭️ ✋ │ · and —, and print() goes to a cp1252-constrained
+    # pipe in CI on Windows. Without this reconfigure the FIRST status line raises
+    # UnicodeEncodeError, the step exits 1, and the failure looks like a gate
+    # failure when it was only a terminal that could not draw a check mark. Same
+    # class of bug scripts/ci_pytest.py fixes for the test suite; errors="replace"
+    # so the worst case is a '?' glyph, never a crash.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, OSError):
+            pass
+
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--root", default=None,
@@ -646,6 +673,12 @@ def main(argv: list[str] | None = None) -> int:
         results.append(chk)
         mark = {"PASS": "✅", "FAIL": "❌", "SKIP": "⏭️ "}[chk.status]
         print(f"\n{mark} #{chk.n:2} {chk.title}   [{chk.status} · {chk.ms} ms]")
+        if chk.status == FAIL:
+            _wf("error", f"exit gate #{chk.n}: {chk.title}",
+                chk.detail + (f" — cause: {chk.evidence[-1].strip().splitlines()[-1][:200]}"
+                              if chk.evidence else ""))
+        elif chk.status == SKIP:
+            _wf("notice", f"exit gate #{chk.n} SKIP: {chk.title}", chk.manual or chk.detail)
         print(f"      {chk.detail}")
         if args.verbose or chk.status == FAIL:
             for e in chk.evidence:
