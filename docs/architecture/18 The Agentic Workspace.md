@@ -164,6 +164,48 @@ build machine cannot reach the host would have cost a debugging session. It was
 measured: `curl -w %{http_code}` → 000 for huggingface.co, cdn-lfs, and the
 resolve endpoint; 200 for pypi.org.
 
+### 4.3 · The chain, proven: scripts/tune_verify.py
+
+"Should work" is not a status a tuning pipeline is allowed to have. The four
+links that don't need huggingface were therefore run for real, in this sandbox,
+on FRIDAY's own exported memory dataset — `scripts/tune_verify.py`, committed
+at `dc47825`:
+
+1. **vocab** — a byte-level GPT-2-compatible BPE built locally (256 byte tokens
+   + 3 specials). Trap found here and fixed: llama.cpp hard-requires
+   `tokenizer.ggml.merges` at load, so the vocab carries **one inert merge**
+   (bytes `0x00`/`0x01`, unreachable in UTF-8 text) purely to satisfy the key.
+2. **model** — random-init GPT-2 4L/4H/128d, ~860k params. Random init *is* the
+   correct subject: only the weight-download link is being bypassed.
+3. **train** — AdamW on the real exported rows, loss masked to the answer
+   tokens only. Second trap fixed: rows whose prompt+answer exceeded the block
+   were silently amputating the ANSWER and training on the stump (that is how
+   you teach wrong facts); they now abort loudly. Guard added: in-process
+   greedy probe every 200 steps exits the moment a trained fact is recalled.
+   Observed: **loss 5.59 → 0.06, probe landed at step 800, ~18 min CPU**.
+4. **convert** — llama.cpp's own `convert_hf_to_gguf.py`, in-process. Third
+   trap: the converter fingerprints pretokenisers by hashing a probe encoding,
+   and a handmade byte vocab is not in its table; the narrow override returns
+   `"gpt-2"` (dashed — the runtime name) from `TextModel.get_vocab_base_pre`.
+   Sources are resolved repo → workdir → home → /tmp, else downloaded.
+5. **interrogate** — the 1.9 MB GGUF loads in `llama_cpp` and answers four
+   questions it was never given as strings, only as gradients. Observed:
+   **4/4 trained facts recalled verbatim** — "Your project name is FRIDAY",
+   "Your cloud budget is ₹0 — local and free tiers only" (multi-byte `₹` and
+   `—` intact through the byte-level round trip), "Kaggle free T4",
+   "lease amount monthly is 18000 INR".
+
+Everything except the HF download is measured. The download runs on your
+machine unchanged; the notebook is its runbook.
+
+The prover also flushed out a host-environment bug: `paths.rebind()` walked
+`sys.modules` and asked modules about their attributes. `torch._classes`
+fabricates a lazy proxy for ANY name and raises `RuntimeError` (not
+`AttributeError`, which `hasattr` swallows) when probed — so merely having
+torch installed broke every root rebind. `rebind` now sniffs defensively.
+The guard tests in `tests/test_tune_verify.py` keep the vocab/tokenizer/load
+contract byte-exact without needing the heavy stack.
+
 ## 5 · What this doc deliberately did NOT build
 
 * **email_send / any write connector.** Presence-gated writes are a review of
