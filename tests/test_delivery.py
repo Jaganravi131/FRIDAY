@@ -22,6 +22,7 @@ import os
 import re
 import sqlite3
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -558,18 +559,33 @@ def gateway(tmp_path):
     httpd.server_close()
 
 
-def _req(url, token=None, body=None, method=None):
+def _req(url, token=None, body=None, method=None, _attempts=3):
+    """One HTTP round trip to the in-process test gateway.
+
+    Retries ONLY the transport layer (WinError 10053 aborts / RST loopbacks):
+    a Windows runner's own TCP stack intermittently aborts connections to a
+    just-spawned 127.0.0.1 server (observed in CI on py3.13/windows-latest, an
+    otherwise-green change set — and Windows is the DELIVERABLE platform, so
+    "flake" there is a defect with extra steps). Assertions/HTTP semantics are
+    untouched: an HTTPError response is still returned to the caller as data.
+    """
     data = json.dumps(body).encode() if body is not None else None
-    req = urllib.request.Request(url, data=data, method=method or ("POST" if data else "GET"))
-    if token:
-        req.add_header("authorization", f"Bearer {token}")
-    if data:
-        req.add_header("content-type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=20) as r:
-            return r.status, json.loads(r.read().decode() or "null"), dict(r.headers)
-    except urllib.error.HTTPError as e:
-        return e.code, json.loads(e.read().decode() or "null"), dict(e.headers)
+    for attempt in range(_attempts):
+        req = urllib.request.Request(url, data=data,
+                                     method=method or ("POST" if data else "GET"))
+        if token:
+            req.add_header("authorization", f"Bearer {token}")
+        if data:
+            req.add_header("content-type", "application/json")
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                return r.status, json.loads(r.read().decode() or "null"), dict(r.headers)
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read().decode() or "null"), dict(e.headers)
+        except (ConnectionAbortedError, ConnectionResetError):
+            if attempt + 1 == _attempts:
+                raise
+            time.sleep(0.1 * (attempt + 1))
 
 
 def test_health_needs_no_token_and_leaks_nothing(gateway):
