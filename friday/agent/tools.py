@@ -594,4 +594,14 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
                 "connector": {"type": "string", "description": "default 'calendar'"},
             },
         }, calendar_read))
+        from .connector_tools import GITHUB_READ_DOC, github_read
+        r.register(ToolSpec("github_read", GITHUB_READ_DOC, {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "1-15, default 10"},
+                "include_notifications": {"type": "boolean",
+                                          "description": "default true"},
+                "connector": {"type": "string", "description": "default 'github'"},
+            },
+        }, github_read))
     return r

@@ -510,6 +510,8 @@ SENSES: dict[str, tuple[str, str]] = {
                       "is denied in unattended scopes and every fetch is announced.",
                       "low"),
     "calendar.read": ("read your calendar", "low"),
+    "github.read":   ("read your assigned GitHub issues, PRs and notifications "
+                      "(GET requests only)", "low"),
     "calendar.write":("create or change calendar events — ALWAYS_CONFIRM", "medium"),
     "email.read":    ("read your email", "medium"),
     "email.send":    ("send email as you — ALWAYS_CONFIRM, denied unattended", "high"),

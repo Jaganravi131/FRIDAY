@@ -39,6 +39,7 @@ TOOL_SENSE: dict[str, str] = {
     "screen_search": "screen.capture",
     "mic_listen": "mic.listen",
     "calendar_read": "calendar.read",
+    "github_read": "github.read",
     "calendar_write": "calendar.write",
     "email_read": "email.read",
     "email_send": "email.send",

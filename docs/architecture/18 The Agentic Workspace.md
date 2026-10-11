@@ -22,7 +22,7 @@ The three additions, each behind its own consent:
 |---|---|---|---|
 | workspace files | `ws_list` `ws_read` `ws_write` | `workspace.files` (low) | one grant covers the folder |
 | curated shell | `ws_shell` | `workspace.exec` (extreme) | the grant IS the allowlist |
-| connectors | `email_read` (gmail) `calendar_read` (caldav) | per-connector (`email.read`, `calendar.read`) | one grant per account type |
+| connectors | `email_read` (gmail) `calendar_read` (caldav) `github_read` (REST) | per-connector (`email.read`, `calendar.read`, `github.read`) | one grant per account type |
 
 Registration and authority are separate on purpose: `FRIDAY_TOOLS_PHASE=2` makes
 the tools *offerable* to the model. `policy.check()` still gates every individual
@@ -143,6 +143,26 @@ Google Calendar is out of scope: its CalDAV wants OAuth, and an OAuth dance on
 a headless laptop is a separate review. iCloud / Fastmail / Nextcloud CalDAV
 with an app password works today.
 
+### 3.5 · GitHub over REST (friday/connectors/github_api.py)
+
+Third driver, and the read-only envelope is the tightest of the three: the
+verb allowlist collapses to exactly GET — every mutating GitHub call needs
+POST/PATCH/PUT/DELETE, which the driver's one egress function never issues
+(and asserts at the wire). Two more decisions carry weight:
+
+* **The host is a CONSTANT, not config.** `API = "https://api.github.com"`,
+  never read from connectors.json. A configurable base URL is a way for a
+  misdirected token to be sent to a lookalike host; fixing the endpoint means
+  the credential can only ever travel to the one host it belongs to.
+* **Registry self-population.** Drivers register on import, and `get()` used
+  to return None until `known()` ran — the launcher calls `get()` first, so a
+  fresh process could be told "unknown connector 'github'" while the same
+  error text listed github as available. The test that caught this
+  contradiction now guards the fix (`_ensure_loaded` inside `get()`).
+
+Use a fine-grained PAT with READ-ONLY repo scope regardless: driver-side GET
+only is defence in depth, not a licence to hand FRIDAY a token that can merge.
+
 ## 4 · The fine-tuning pipeline (friday/tune/)
 
 ### 4.1 · The honest framing
@@ -239,13 +259,15 @@ contract byte-exact without needing the heavy stack.
   their own.
 * **Full shell.** The curated list is the consent surface. Expanding it is a
   sense-grant diff with a test, not a config change.
-* **More connectors.** ~~Calendar (CalDAV)~~ — landed (read-only by verb
-  allowlist, below). GitHub, Drive: each is a ~200-line driver against the
-  contract in §3.1. The launcher, containment, and audit plumbing are already
-  here; the order they land in should be demand, not dazzle.
-* **Google Calendar.** Its CalDAV endpoint wants OAuth; an OAuth dance on a
+* **More connectors.** ~~Calendar (CalDAV)~~ ~~GitHub (REST)~~ — both landed,
+  each read-only by verb allowlist (§3.4, §3.5). Drive: same OAuth deferral as
+  Google Calendar. Beyond that, each new driver is a ~200-line adapter against
+  the contract in §3.1; the launcher, containment, and audit plumbing are
+  already here, and the order they land in should be demand, not dazzle.
+* **Google Calendar / Drive.** Their APIs want OAuth; an OAuth dance on a
   headless laptop is a different review. iCloud/Fastmail/Nextcloud CalDAV with
-  an app password works today; Google is deliberately deferred.
+  an app password, and GitHub REST with a fine-grained PAT, work today;
+  the OAuth-shaped ones are deliberately deferred.
 * **Training in-process.** The core stays stdlib-only (CI checks the imports).
   unsloth/torch exist only inside the emitted notebook, on Colab's box.
 

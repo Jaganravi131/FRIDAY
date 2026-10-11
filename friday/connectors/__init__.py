@@ -97,13 +97,23 @@ def register(cls: type[Connector]) -> type[Connector]:
     return cls
 
 
+# ⭐ `get()` must populate the registry itself. Drivers register on IMPORT, and
+# the import previously happened only inside `known()`. But launcher tools call
+# `get()` FIRST and fall back to `known()`'s listing on None — so a caller in a
+# fresh process saw "unknown connector 'github'" while the error text correctly
+# listed github as available, which is the worst kind of contradiction to hand a
+# user. Observed live by test_unconfigured_connector_returns_howto_from_tool.
+def _ensure_loaded() -> None:
+    from . import caldav, github_api, gmail  # noqa: F401
+
+
 def get(connector_id: str) -> Connector | None:
+    if connector_id not in _REGISTRY:
+        _ensure_loaded()
     cls = _REGISTRY.get(connector_id)
     return cls() if cls else None
 
 
 def known() -> list[str]:
-    # Importing the drivers is what populates the registry; keep the import list
-    # next to the registry so a new driver can't forget either step.
-    from . import caldav, gmail  # noqa: F401
+    _ensure_loaded()
     return sorted(_REGISTRY)
