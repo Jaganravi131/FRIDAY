@@ -23,6 +23,10 @@ Subcommands:
     senses     ⭐ tiered consent — see, grant and revoke what FRIDAY may perceive
     bench      ⭐ the retrieval regression gate. Law 10 says every fine-tune must
                re-run the needle test; this makes "must" a nonzero exit code.
+    connectors ⭐ external accounts (gmail first) — status and config help, never
+               prints a secret
+    tune       ⭐ the personal fine-tuning pipeline — export instruction data from
+               memory, emit the free-Colab runbook, keep the stdlib-only core clean
 
 `rich` is used if installed and ignored if not. The Ledger printout is on by
 default in ask/chat because looking at it for a week teaches more about context
@@ -515,6 +519,13 @@ SENSES: dict[str, tuple[str, str]] = {
     "fs.write":      ("write files outside FRIDAY_ROOT — ALWAYS_CONFIRM", "high"),
     "shell.exec":    ("run commands — ALWAYS_CONFIRM, denied unattended", "extreme"),
     "network.egress":("POST to arbitrary endpoints (http_post) — ALWAYS_CONFIRM", "high"),
+    "workspace.files":("read and write inside friday-workspace/ — the agent's own "
+                       "confined folder; connector downloads land here, and hostile "
+                       "content is withheld, never obeyed", "low"),
+    "workspace.exec": ("curated shell — ONLY the allowlisted read-only commands in "
+                       "agent/workspace.py (ls/grep/git status…). Granting this IS "
+                       "approving that list; abusive attempts are audited, and it "
+                       "is denied unattended", "extreme"),
 }
 
 
@@ -765,7 +776,125 @@ def build_parser() -> argparse.ArgumentParser:
                    help="bearer token; default reads/creates config/serve.token (0600)")
     p.add_argument("--quiet", action="store_true")
 
+    p = sub.add_parser("connectors", help="⭐ external accounts — status + config help")
+    p.set_defaults(fn=cmd_connectors); common(p)
+    p.add_argument("--test", default=None, metavar="ID",
+                   help="actually fetch from connector ID (gmail) — < 1-2 second status")
+
+    p = sub.add_parser("tune", help="⭐ the personal fine-tuning pipeline (dataset + Colab notebook)")
+    p.set_defaults(fn=cmd_tune); common(p)
+    p.add_argument("--export", default=None, metavar="OUT.jsonl",
+                   help="export memory as an instruction dataset (provenance + redaction applied)")
+    p.add_argument("--notebook", default=None, metavar="OUT.ipynb",
+                   help="emit the free-Colab QLoRA runbook")
+    p.add_argument("--base", default=None, help="base model repo id (default: tuned pick)")
+    p.add_argument("--epochs", type=int, default=2)
+    p.add_argument("--models", action="store_true", help="the candidate base models with real sizing")
+
     return ap
+
+
+def cmd_connectors(args) -> int:
+    """`friday connectors` — which account doorways exist, which are configured.
+
+    Prints status and the stanza to paste for unconfigured ones. Never prints the
+    secret fields themselves — a status screen that echoes your app password is a
+    screenshot away from a leak.
+    """
+    from .connectors import SECRET_FIELDS, known, get
+
+    ids = known()
+    if not ids:
+        _say("no connector drivers registered")
+        return 1
+    for cid in ids:
+        conn = get(cid)
+        st = conn.status()
+        mark = "✅" if st.get("configured") else "—"
+        _say(f"{mark} {cid:10} sense: {conn.sense:14} "
+             f"{'configured' if st.get('configured') else 'not configured'}")
+        redacted = {k: v for k, v in st.items()
+                    if k not in ("connector", "configured", "how_to")
+                    and k.lower() not in SECRET_FIELDS}
+        for k, v in redacted.items():
+            _say(f"    {k}: {v}")
+        if not st.get("configured") and st.get("how_to"):
+            _say(f"    {st['how_to']}")
+        elif st.get("configured") and getattr(args, "test", None) == cid:
+            _say("    fetching (limit 2, last 2 days)…")
+            try:
+                items = conn.fetch(limit=2, since_days=2)
+                _say(f"    ✅ fetch OK: {len(items)} message(s) — read-only, nothing "
+                     "marked or moved")
+            except Exception as e:
+                _say(f"    ❌ fetch failed: {type(e).__name__} — check the app "
+                     "password and that IMAP is enabled in Gmail settings")
+                return 1
+    return 0
+
+
+def cmd_tune(args) -> int:
+    """`friday tune` — the personal fine-tuning pipeline front door.
+
+    What this machine does: export the dataset, emit the Colab runbook. What runs
+    ELSEWHERE (Colab free T4): the download + training — egress to huggingface is
+    blocked in some environments, and 16 GB of VivoBook RAM is inference hardware,
+    not training hardware. Both facts are in docs/architecture/18, not hidden.
+    """
+    from .tune import dataset as tune_ds
+    from .tune import models as tune_models
+    from .tune import notebook as tune_nb
+
+    did = False
+    if args.models:
+        _say(tune_models.render_table())
+        _say("")
+        _say(f"default pick: {tune_models.default_choice().repo}")
+        did = True
+
+    if args.export:
+        from pathlib import Path as _P
+        conn = _conn(args)
+        try:
+            rows, stats = tune_ds.export_dataset(conn)
+        finally:
+            conn.close()
+        n = tune_ds.write_jsonl(rows, _P(args.export))
+        _say(f"✅ exported {len(rows)} instruction rows -> {args.export} ({n} bytes)")
+        _say(f"   facts considered: {stats.facts_seen} · "
+             f"persona: {stats.persona_rows} · routines: {stats.routine_rows}")
+        if stats.skipped:
+            _say(f"   skipped (by design): "
+                 f"{', '.join(f'{k}={v}' for k, v in sorted(stats.skipped.items()))}")
+        if stats.redacted_rows:
+            _say(f"   ⚠️  {stats.redacted_rows} row(s) contained secret-shaped text and "
+                 "were redacted before export")
+        if len(rows) < 50:
+            _say("   ⚠️  under ~50 rows a fine-tune learns almost nothing; this file is "
+                 "a pipeline TEST, not a training set. Live with FRIDAY for a few "
+                 "weeks first.")
+        did = True
+
+    if args.notebook:
+        from pathlib import Path as _P
+        n = tune_nb.write_notebook(_P(args.notebook), base_repo=args.base,
+                                   epochs=args.epochs)
+        _say(f"✅ wrote {args.notebook} ({n} bytes)")
+        _say("   Upload to https://colab.research.google.com (Runtime: T4), then "
+             "Runtime → Run all. The dataset file is uploaded inside the notebook.")
+        _say("   When it finishes: `friday bench --gate` before the new model answers "
+             "for real (Law 10).")
+        did = True
+
+    if not did:
+        _say("friday tune — the personal fine-tuning pipeline\n"
+             "  --models                 candidate base models with real sizing\n"
+             "  --export OUT.jsonl       export memory as instruction data\n"
+             "  --notebook OUT.ipynb     emit the Colab QLoRA runbook\n"
+             "  --base REPO              override the base model\n"
+             "\nThe order is: --export (here) → --notebook (here) → Colab (train) → "
+             "bench --gate (here).")
+    return 0
 
 
 def _scripts_dir() -> Path:
