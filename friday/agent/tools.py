@@ -460,12 +460,14 @@ def registry_phase() -> int:
 
     Opt-in rather than opt-out, because tiered permissions means a new sense is something
     the user turns on deliberately, not something that appears after a `git pull`. Set
-    `FRIDAY_TOOLS_PHASE=1` to enable the read-only web tools.
+    `FRIDAY_TOOLS_PHASE=1` adds the read-only web. `=2` adds the agentic workspace
+    (ws_list/ws_read/ws_write/ws_shell) — still sense-gated per call by policy, so
+    enabling the phase OFFERS the tools; it does not grant the power to use them.
     """
     import os
 
     try:
-        return max(0, min(1, int(os.environ.get("FRIDAY_TOOLS_PHASE", "0"))))
+        return max(0, min(2, int(os.environ.get("FRIDAY_TOOLS_PHASE", "0"))))
     except ValueError:
         return 0
 
@@ -531,4 +533,55 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
             },
             "required": ["topic"],
         }, wiki))
+    if phase >= 2:
+        # Phase 2 = the agentic workspace: one confined folder + a curated shell.
+        # Registration only makes them OFFERABLE. policy.check() still gates every
+        # call on the workspace.files / workspace.exec senses, and ws_shell is flat
+        # denied in unattended scope — offering a tool is never granting it.
+        from .workspace import (WS_LIST_DOC, WS_READ_DOC, WS_SHELL_DOC,
+                                WS_WRITE_DOC, ws_list, ws_read, ws_shell, ws_write)
+        r.register(ToolSpec("ws_list", WS_LIST_DOC, {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "relative folder, '.' default"},
+                "depth": {"type": "integer", "description": "1-4, default 2"},
+            },
+        }, ws_list))
+        r.register(ToolSpec("ws_read", WS_READ_DOC, {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "relative file path"},
+            },
+            "required": ["path"],
+        }, ws_read))
+        r.register(ToolSpec("ws_write", WS_WRITE_DOC, {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "relative file path"},
+                "text": {"type": "string", "description": "UTF-8 content"},
+                "append": {"type": "boolean", "description": "default false (overwrite)"},
+            },
+            "required": ["path", "text"],
+        }, ws_write))
+        r.register(ToolSpec("ws_shell", WS_SHELL_DOC, {
+            "type": "object",
+            "properties": {
+                "command": {"type": "string",
+                            "description": "one allowlisted command, e.g. 'git status --short'"},
+            },
+            "required": ["command"],
+        }, ws_shell))
+        # Connectors arrive behind the same phase flag: offering email_read is not
+        # granting email.read (policy does that per call), and an unconfigured
+        # connector returns its own how-to rather than being absent.
+        from .connector_tools import EMAIL_READ_DOC, email_read
+        r.register(ToolSpec("email_read", EMAIL_READ_DOC, {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "1-10, default 5"},
+                "since_days": {"type": "integer", "description": "default 7"},
+                "unseen_only": {"type": "boolean", "description": "default false"},
+                "connector": {"type": "string", "description": "default 'gmail'"},
+            },
+        }, email_read))
     return r

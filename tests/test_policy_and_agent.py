@@ -215,15 +215,27 @@ def test_unattended_deny_list_is_a_subset_of_always_confirm():
     those, who is watching IS the relevant variable — fetching a public page changes
     nothing anywhere, and the danger is unobserved steering rather than the action
     itself. The exception is asserted narrowly below so it cannot grow silently.
-    """
-    from friday.agent.policy import PRESENCE_GATED
 
-    assert UNATTENDED_DENY <= ALWAYS_CONFIRM | PRESENCE_GATED
+    ⭐ A second named exception, added with the agentic workspace: ALLOWLIST_GATED.
+    `ws_shell`'s consent surface is the curated program/verb list approved in one
+    explicit grant of workspace.exec; a per-call dialog on every `ls` would fire
+    constantly and get disabled, which is worse than no dialog. Same narrow
+    assertion — it holds exactly one tool, and adding to it means re-arguing why
+    an up-front list cannot carry the consent.
+    """
+    from friday.agent.policy import ALLOWLIST_GATED, PRESENCE_GATED
+
+    assert UNATTENDED_DENY <= ALWAYS_CONFIRM | PRESENCE_GATED | ALLOWLIST_GATED
     assert ALWAYS_CONFIRM & PRESENCE_GATED == set(), \
         "a tool is either confirmation-gated or presence-gated, never both"
+    assert ALWAYS_CONFIRM & ALLOWLIST_GATED == set(), \
+        "allowlist-gated replaces per-call confirmation; requiring both is double-gating"
     assert PRESENCE_GATED == {"web_read", "wiki"}, \
         "PRESENCE_GATED is a narrow exception for read-only, SSRF-guarded web tools; " \
         "adding to it means re-arguing why a confirmation dialog would not work"
+    assert ALLOWLIST_GATED == {"ws_shell"}, \
+        "ALLOWLIST_GATED holds only the curated shell: expanding it means the " \
+        "allowlist stopped being small enough to serve as its own consent"
     assert ALWAYS_CONFIRM - UNATTENDED_DENY == {"delete_fact", "purge_memory"}, \
         "the two purely-destructive tools confirm interactively but are not in the " \
         "external-world deny list"
