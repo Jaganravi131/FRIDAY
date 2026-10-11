@@ -87,18 +87,32 @@ def rebind(new_root) -> None:
     me = sys.modules.get(__name__)
 
     def _is_friday_paths(m) -> bool:
-        if m is None or m is me or not hasattr(m, "ensure_layout"):
+        try:  # ⭐ probe defensively: third-party modules (torch._classes is the
+            # observed case) answer ANY attribute lookup by fabricating a lazy
+            # proxy, then raise RuntimeError — not AttributeError — when that
+            # proxy is itself probed. `hasattr` swallows AttributeError only,
+            # so one bad sys.modules entry nuked every rebind() call. Any
+            # exception while sniffing means "not one of ours".
+            if m is None or m is me or not hasattr(m, "ensure_layout"):
+                return False
+            return isinstance(getattr(m, "ROOT", None), Path) and \
+                isinstance(getattr(m, "ARTIFACTS", None), Path)
+        except Exception:
             return False
-        return isinstance(getattr(m, "ROOT", None), Path) and \
-            isinstance(getattr(m, "ARTIFACTS", None), Path)
 
     for mod in list(sys.modules.values()):
         if mod is None:
             continue
         for attr in ("paths", "friday_paths"):
-            held = getattr(mod, attr, None)
+            try:
+                held = getattr(mod, attr, None)
+            except Exception:            # same lazy-proxy hazard on the holder
+                continue
             if held is not None and held is not me and _is_friday_paths(held):
-                setattr(mod, attr, me)
+                try:
+                    setattr(mod, attr, me)
+                except Exception:        # frozen modules refuse writes; skip
+                    continue
 
 
 def ensure_layout() -> None:

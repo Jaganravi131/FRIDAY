@@ -56,3 +56,6 @@ Thumbs.db
 
 # connector credentials — NEVER commit (they are per-install, not per-repo)
 config/connectors.json
+
+# ---- third-party sources fetched at verify time (scripts/tune_verify.py) ----
+llama.cpp-master/
