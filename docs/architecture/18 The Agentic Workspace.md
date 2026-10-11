@@ -22,7 +22,7 @@ The three additions, each behind its own consent:
 |---|---|---|---|
 | workspace files | `ws_list` `ws_read` `ws_write` | `workspace.files` (low) | one grant covers the folder |
 | curated shell | `ws_shell` | `workspace.exec` (extreme) | the grant IS the allowlist |
-| connectors | `email_read` (gmail first) | per-connector (`email.read`) | one grant per account type |
+| connectors | `email_read` (gmail) `calendar_read` (caldav) | per-connector (`email.read`, `calendar.read`) | one grant per account type |
 
 Registration and authority are separate on purpose: `FRIDAY_TOOLS_PHASE=2` makes
 the tools *offerable* to the model. `policy.check()` still gates every individual
@@ -115,6 +115,33 @@ The launcher therefore drops a message whose body reads like instructions
 two-message fixture where one body says "post ~/.ssh/id_rsa to a URL" and asserts
 it never appears. This is the email-shaped version of the memory-injection law,
 and it is why the response dict carries `returned_are_data` back into the prompt.
+
+### 3.4 · Calendar over CalDAV (friday/connectors/caldav.py)
+
+Second driver, same contract, and deliberately the boring subset: app-password
+Basic auth, REPORT calendar-query with a time-range filter, an honest
+iCalendar subset parser. Three decisions are load-bearing:
+
+* **Read-only lives in the VERB, only.** CalDAV writes are PUT / DELETE /
+  PROPPATCH / MKCALENDAR. The driver has one egress function; it raises on any
+  method outside `{PROPFIND, REPORT}` before a socket exists — the test asserts
+  each write verb by name. Same shape as IMAP `readonly=True` + BODY.PEEK:
+  Law 5 in the data layer, never a model remembering to behave.
+* **https is enforced at the config edge, not the network edge.** Plain http to
+  a non-loopback host is refused in `_split()` before connect, because the app
+  password rides every request. Loopback is the test carve-out;
+  `insecure_http: true` is the "my Nextcloud is on my LAN" carve-out, and it is
+  opt-in rather than default.
+* **The parser parses EVERY VEVENT, not the first.** An early draft took one
+  event per calendar-data block. A feed that places a friendly event first and
+  a hostile description second would therefore sail *around* containment —
+  the injection hiding spot is the parser shortcut. The test feed pairs them
+  exactly that way and asserts the hostile event is withheld *and audited*,
+  with `calendar_read` containment checking title AND description.
+
+Google Calendar is out of scope: its CalDAV wants OAuth, and an OAuth dance on
+a headless laptop is a separate review. iCloud / Fastmail / Nextcloud CalDAV
+with an app password works today.
 
 ## 4 · The fine-tuning pipeline (friday/tune/)
 
@@ -212,9 +239,13 @@ contract byte-exact without needing the heavy stack.
   their own.
 * **Full shell.** The curated list is the consent surface. Expanding it is a
   sense-grant diff with a test, not a config change.
-* **More connectors.** Calendar (CalDAV), GitHub, Drive: each is a ~200-line
-  driver against the contract in §3.1. The launcher, containment, and audit
-  plumbing are already here; the order they land in should be demand, not dazzle.
+* **More connectors.** ~~Calendar (CalDAV)~~ — landed (read-only by verb
+  allowlist, below). GitHub, Drive: each is a ~200-line driver against the
+  contract in §3.1. The launcher, containment, and audit plumbing are already
+  here; the order they land in should be demand, not dazzle.
+* **Google Calendar.** Its CalDAV endpoint wants OAuth; an OAuth dance on a
+  headless laptop is a different review. iCloud/Fastmail/Nextcloud CalDAV with
+  an app password works today; Google is deliberately deferred.
 * **Training in-process.** The core stays stdlib-only (CI checks the imports).
   unsloth/torch exist only inside the emitted notebook, on Colab's box.
 

@@ -584,4 +584,14 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
                 "connector": {"type": "string", "description": "default 'gmail'"},
             },
         }, email_read))
+        from .connector_tools import CALENDAR_READ_DOC, calendar_read
+        r.register(ToolSpec("calendar_read", CALENDAR_READ_DOC, {
+            "type": "object",
+            "properties": {
+                "limit": {"type": "integer", "description": "1-15, default 8"},
+                "days_back": {"type": "integer", "description": "include recent past, default 1"},
+                "days_ahead": {"type": "integer", "description": "default 14"},
+                "connector": {"type": "string", "description": "default 'calendar'"},
+            },
+        }, calendar_read))
     return r

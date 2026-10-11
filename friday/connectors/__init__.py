@@ -105,5 +105,5 @@ def get(connector_id: str) -> Connector | None:
 def known() -> list[str]:
     # Importing the drivers is what populates the registry; keep the import list
     # next to the registry so a new driver can't forget either step.
-    from . import gmail  # noqa: F401
+    from . import caldav, gmail  # noqa: F401
     return sorted(_REGISTRY)
