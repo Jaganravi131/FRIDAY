@@ -153,8 +153,14 @@ def _agent(conn, args) -> Agent:
     registry = build_registry()
 
     def confirm(name: str, payload: dict) -> bool:
-        _say(f"\n⚠️  FRIDAY wants to run `{name}` with:")
-        _say("   " + json.dumps(payload, ensure_ascii=False)[:400])
+        # ⭐ NO TRUNCATION, and that is a SECURITY property, not a style choice.
+        # ALWAYS_CONFIRM's pillar is "the human approves the EXACT payload".
+        # This used to print a [:400] summary — which meant that for any
+        # confirmation-gated tool call longer than 400 chars (an email body,
+        # a file write), text the human could not see was being confirmed
+        # blind. Consent bounded by a truncation cap is not consent.
+        _say(f"\n⚠️  FRIDAY wants to run `{name}` — this is the COMPLETE payload:")
+        _say(json.dumps(payload, ensure_ascii=False, indent=2))
         ans = input("   allow? [y/N] ").strip().lower()
         return ans in ("y", "yes")
 
@@ -514,7 +520,7 @@ SENSES: dict[str, tuple[str, str]] = {
                       "(GET requests only)", "low"),
     "calendar.write":("create or change calendar events — ALWAYS_CONFIRM", "medium"),
     "email.read":    ("read your email", "medium"),
-    "email.send":    ("send email as you — ALWAYS_CONFIRM, denied unattended", "high"),
+    "email.send":    ("send email as you — ALWAYS_CONFIRM, interactive console only, denied unattended", "high"),
     "location.read": ("read your location", "medium"),
     "screen.capture":("read or search your screen — the most invasive sense here", "high"),
     "mic.listen":    ("listen to your microphone", "high"),

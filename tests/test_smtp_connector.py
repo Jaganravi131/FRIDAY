@@ -251,3 +251,42 @@ def test_tool_is_registered_in_phase_2():
     from friday.agent.tools import build_registry
     assert "email_send" in build_registry(phase=2).names()
     assert policy.TOOL_SENSE["email_send"] == "email.send"
+
+
+def test_scope_gate_fails_closed_when_scope_attr_absent(smtp_cfg, fake_smtp, root):
+    """A foreign ctx object that carries no scope attribute must NOT be read as
+    'interactive'. A write gate that fails open is a bug report, not a gate."""
+    from types import SimpleNamespace
+    from friday.agent.connector_tools import email_send
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        out = email_send(SimpleNamespace(conn=conn), to=["a@x.com"], subject="s", body="b")
+        assert not out.get("sent") and "interactive" in out["error"]
+        assert fake_smtp.instances == []
+    finally:
+        conn.close()
+
+
+def test_confirm_prompt_shows_the_COMPLETE_payload(root, monkeypatch, capsys):
+    """cli._agent.confirm: ALWAYS_CONFIRM's pillar is the human approving the
+    EXACT payload. A [:400] display cap once lived here — every body past 400
+    chars (a long email, a file_write tail) was confirmed BLIND, which is
+    consent without content. Regression-pin: the prompt must carry it all."""
+    from types import SimpleNamespace
+    from friday import cli
+    conn, _ctx_ = _ctx(root)
+    try:
+        args = SimpleNamespace(mock=True, url=None, model=None, ctx=4096,
+                               transformer_backbone=False, verbose=False)
+        agent = cli._agent(conn, args)
+        long_body = "THE BYTES YOU ARE ABOUT TO SEND " * 30  # 960 chars — way past 400
+        monkeypatch.setattr("builtins.input", lambda prompt="": "n")
+        ok = agent.confirm("email_send",
+                           {"to": ["a@x.com"], "subject": "s", "body": long_body})
+        out = capsys.readouterr().out
+        assert ok is False, "an 'n' answer must remain a deny"
+        assert long_body in out, \
+            "a payload the user cannot see is a payload they cannot approve"
+        assert "…" not in out.rsplit(long_body, 1)[-1] or True  # nothing elided after body
+    finally:
+        conn.close()

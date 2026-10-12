@@ -265,7 +265,9 @@ def email_send(ctx, to=None, subject: str = "", body: str = "",
     send. The scope gate below is its own: 'remote' is allowed by policy for
     reads, but a send with no confirmation channel defeats the exact-payload
     rule, so the launcher itself refuses anything but the keyboard."""
-    if getattr(ctx, "scope", "interactive") != "interactive":
+    # Fail CLOSED on the scope read: a ctx object that doesn't carry a scope is
+    # treated as "not the interactive console", never as permission to send.
+    if getattr(ctx, "scope", None) != "interactive":
         return {"error": "email_send only runs from the interactive console",
                 "why": ("a send must be confirmed with the exact payload shown, and "
                         "only the laptop/CLI turn has that confirmation channel today; "

@@ -19,7 +19,10 @@ into a tool call". Every connector MUST therefore:
 
 Connectors here are READ-first. Reading your mail is reversible and boring;
 sending mail as you is neither, which is why email_send is in policy.ALWAYS_CONFIRM
-and UNATTENDED_DENY regardless of which connector implements it.
+and UNATTENDED_DENY regardless of which connector implements it. Exactly ONE write
+connector exists (smtp.py, docs 18 §3.6): everything above still holds, and §3.6's
+write contract (confirm-then-send, exact bytes, no unattached content) is the bar
+any further write driver must clear in its own review.
 """
 from __future__ import annotations
 
