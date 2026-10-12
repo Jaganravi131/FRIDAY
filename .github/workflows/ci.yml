@@ -47,7 +47,7 @@ jobs:
         run: python -m pip install --upgrade pip pytest pytest-subtests
 
       - name: Core imports with nothing but the standard library
-        run: python -c "import friday, friday.cli, friday.agent.loop, friday.ledger.compiler, friday.memory.compiler, friday.retrieval.pipeline, friday.security; print('stdlib-only core OK')"
+        run: python -c "import friday, friday.cli, friday.agent.loop, friday.ledger.compiler, friday.memory.compiler, friday.retrieval.pipeline, friday.security, friday.research.deltagate; print('stdlib-only core OK')"
 
       - name: Test suite
         # Run through scripts/ci_pytest.py rather than invoking pytest directly. Same
