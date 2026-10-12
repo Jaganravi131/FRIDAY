@@ -231,19 +231,44 @@ def test_server_error_never_echoes_the_password(smtp_cfg, fake_smtp, root):
 
 
 def test_send_succeeded_and_failed_both_audited_body_never_logged(smtp_cfg, fake_smtp, root):
+    """THE audit rows for a WRITE tool are the paper trail of record: after the
+    fact you must be able to answer 'did FRIDAY send mail as me, to whom, about
+    what' — and the body must NEVER be in the log. Pin BOTH the success and the
+    failure row; an audit path with no test is an audit path that can rot."""
     from friday.agent.connector_tools import email_send
     conn, ctx = _ctx(root)
     body = "the whole confidential draft text that must not reach the audit log"
     out = email_send(ctx, to=["boss@example.com"], subject="meter reading", body=body)
     assert out["sent"] and out["undo"].startswith("none")
+
+    # Failing send: the real driver wraps every smtplib failure type-name-only.
+    import friday.connectors.smtp as m
+    orig = m.transport
+    def bad(host, port, timeout):
+        s = orig(host, port, timeout)
+        s.fail_send = smtplib.SMTPException("554 relay refused")
+        return s
+    m.transport = bad
+    try:
+        fail_body = "second secret body that also must not reach the audit log"
+        out2 = email_send(ctx, to=["boss@example.com"], subject="meter reading retry",
+                          body=fail_body)
+    finally:
+        m.transport = orig
+    assert not out2.get("sent")
+
     rows = conn.execute(
         "SELECT action, target, sense_id, detail FROM audit "
-        "WHERE action IN ('connector.sent', 'connector.send_failed')").fetchall()
-    assert [r[0] for r in rows] == ["connector.sent"]
-    assert rows[0][2] == "email.send"
-    assert "boss@example.com" in rows[0][1]
-    assert "meter reading" in rows[0][3]
-    assert body not in rows[0][3], "the audit trail says THAT you sent, not WHAT"
+        "WHERE action IN ('connector.sent', 'connector.send_failed') "
+        "ORDER BY rowid").fetchall()
+    assert [r[0] for r in rows] == ["connector.sent", "connector.send_failed"], \
+        "both halves of the write path must leave an audit row"
+    for _action, target, sense, detail in rows:
+        assert sense == "email.send"
+        assert "boss@example.com" in target
+        assert "meter reading" in detail
+        assert body not in detail and fail_body not in detail, \
+            "the audit trail says THAT you sent, never WHAT"
     conn.close()
 
 
@@ -287,6 +312,5 @@ def test_confirm_prompt_shows_the_COMPLETE_payload(root, monkeypatch, capsys):
         assert ok is False, "an 'n' answer must remain a deny"
         assert long_body in out, \
             "a payload the user cannot see is a payload they cannot approve"
-        assert "…" not in out.rsplit(long_body, 1)[-1] or True  # nothing elided after body
     finally:
         conn.close()

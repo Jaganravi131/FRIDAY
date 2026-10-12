@@ -187,9 +187,11 @@ weight, and `tests/test_smtp_connector.py` pins every one:
    was never instantiated across eight hostile inputs.
 4. **TLS from the first byte + secrets never echoed.** SMTP_SSL on 465 means
    there is no pre-TLS plaintext phase to downgrade; and every smtplib failure
-   is re-raised with a TYPE NAME ONLY, because a typo'd or hostile relay can
-   quote your password back inside its 5xx text (a test embeds the password in
-   a fake server error and asserts it never reaches the launcher).
+   is re-raised carrying at most a TYPE NAME — plus, on the refused-recipients
+   path, the addresses the user already approved. Server text NEVER leaves the
+   driver, because a typo'd or hostile relay can quote your password back
+   inside its 5xx reply (a test embeds the password in a fake server error and
+   asserts it never reaches the launcher).
 5. **The audit trail records THAT, not WHAT.** Each send (or failed send)
    writes a `connector.sent`/`connector.send_failed` row with recipient and
    subject — never the body. The audit DB is an artifact the memory compressor
