@@ -227,6 +227,87 @@ def github_read(ctx, limit: int = 10, include_notifications: bool = True,
     return result
 
 
+EMAIL_SEND_DOC = (
+    "Send ONE email as you via the configured SMTP connector ('gmail.smtp', "
+    "app-password auth, TLS from the first byte). This is IRREVERSIBLE and "
+    "EXTERNALLY VISIBLE: policy (ALWAYS_CONFIRM) forces the human to see the "
+    "exact to/subject/body and say yes BEFORE this tool runs, one confirmation "
+    "buys exactly one send, and the bytes on the wire are precisely the bytes "
+    "confirmed — no signature, footer, CC or BCC is (or can be) added. Sends "
+    "are refused in every non-interactive scope: heartbeat/dreaming are "
+    "policy-denied outright, and the phone gateway ('remote') has no "
+    "confirmation channel yet, so take it to the laptop. Plain name@host "
+    "addresses only, at most 5 recipients, subject ≤200 chars, body ≤20000."
+)
+
+
+def _audit_send(ctx, connector: str, target: str, ok: bool, detail: str) -> None:
+    """The audit trail row for a send. Records THAT mail went out, to whom, and
+    the subject — never the body. Even for your own messages, the audit trail is
+    an artifact that outlives the turn; full bodies belong in the Sent folder,
+    not in a plaintext log the memory compressor might quote."""
+    try:
+        from .policy import log as _log
+        _log(ctx.conn, actor="agent",
+             action="connector.sent" if ok else "connector.send_failed",
+             target=f"{connector} → {target}"[:200], sense_id="email.send",
+             decision="allowed", detail=detail[:200])
+    except Exception:
+        pass
+
+
+def email_send(ctx, to=None, subject: str = "", body: str = "",
+               connector: str = "gmail.smtp") -> dict:
+    """The FIRST write tool in the connector family. The confirm gate lives
+    UPSTREAM in policy+loop; by the time control reaches this function the user
+    has already seen and approved these exact arguments — so this function's
+    only moral job is to pass them to the driver UNCHANGED and to audit the
+    send. The scope gate below is its own: 'remote' is allowed by policy for
+    reads, but a send with no confirmation channel defeats the exact-payload
+    rule, so the launcher itself refuses anything but the keyboard."""
+    if getattr(ctx, "scope", "interactive") != "interactive":
+        return {"error": "email_send only runs from the interactive console",
+                "why": ("a send must be confirmed with the exact payload shown, and "
+                        "only the laptop/CLI turn has that confirmation channel today; "
+                        "the phone gateway gets reads, not sends"),
+                "hint": "ask again from `friday chat` on the computer itself"}
+    if isinstance(to, str):
+        to = [to]  # one-address convenience; the driver still validates the shape
+    if not to:
+        return {"error": "'to' is required (a list of plain name@host addresses)"}
+
+    conn = _get_connector(connector)
+    if conn is None:
+        from ..connectors import known
+        return {"error": (f"unknown connector '{connector}'. Configured drivers: "
+                          f"{known()}")}
+    try:
+        status = conn.status()
+        if not status.get("configured"):
+            return {"error": f"connector '{connector}' is not configured",
+                    "how_to": status.get("how_to", ""),
+                    "note": "credentials live in config/connectors.json — never in memory"}
+        receipt = conn.send(to=to, subject=subject, body=body)
+    except Exception as e:
+        msg = str(e)
+        # Driver guarantees: config-missing text and ValueErrors are OUR strings
+        # (safe); everything touching the server was already stripped to a type
+        # name by the driver in case an error payload echoes credentials.
+        _audit_send(ctx, connector, ", ".join(map(str, to)), ok=False,
+                    detail=f"subject={str(subject)[:80]} failed={type(e).__name__}")
+        emsg = msg if ("not configured" in msg or "Add this" in msg
+                       or isinstance(e, ValueError)) else f"smtp {type(e).__name__}"
+        return {"error": f"send failed: {emsg}", "sent": False}
+
+    _audit_send(ctx, connector, ", ".join(map(str, to)), ok=True,
+                detail=f"subject={str(subject)[:80]}")
+    return {"sent": True,
+            "to": receipt["to"], "subject": receipt["subject"],
+            "body_chars": receipt["body_chars"],
+            "undo": ("none — the message is OUT. If it was wrong, the follow-up is a "
+                     "correction email, not another attempt of this tool.")}
+
+
 def _audit_withhold(ctx, connector: str, title: str, reason: str) -> None:
     try:
         from .policy import log as _log

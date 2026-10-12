@@ -104,7 +104,7 @@ def register(cls: type[Connector]) -> type[Connector]:
 # listed github as available, which is the worst kind of contradiction to hand a
 # user. Observed live by test_unconfigured_connector_returns_howto_from_tool.
 def _ensure_loaded() -> None:
-    from . import caldav, github_api, gmail  # noqa: F401
+    from . import caldav, github_api, gmail, smtp  # noqa: F401
 
 
 def get(connector_id: str) -> Connector | None:

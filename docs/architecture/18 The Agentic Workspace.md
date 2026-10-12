@@ -22,7 +22,7 @@ The three additions, each behind its own consent:
 |---|---|---|---|
 | workspace files | `ws_list` `ws_read` `ws_write` | `workspace.files` (low) | one grant covers the folder |
 | curated shell | `ws_shell` | `workspace.exec` (extreme) | the grant IS the allowlist |
-| connectors | `email_read` (gmail) `calendar_read` (caldav) `github_read` (REST) | per-connector (`email.read`, `calendar.read`, `github.read`) | one grant per account type |
+| connectors | `email_read` (gmail) `calendar_read` (caldav) `github_read` (REST) `email_send` (smtp, §3.6) | per-connector (`email.read`, `calendar.read`, `github.read`, `email.send`) | one grant per account type; send is ALWAYS_CONFIRM |
 
 Registration and authority are separate on purpose: `FRIDAY_TOOLS_PHASE=2` makes
 the tools *offerable* to the model. `policy.check()` still gates every individual
@@ -102,10 +102,12 @@ layer) applied to a mail server. A test asserts `readonly_selected is True` and
 PEEK on every fetch against a stubbed imaplib, because a design claim nobody
 checks is an aspiration.
 
-Sending is deliberately absent from the driver. When it exists it will be
-`email_send` (already in `ALWAYS_CONFIRM` ∩ `UNATTENDED_DENY`) over SMTP, gated by
-presence — the day FRIDAY can send mail unattended as you is a design review, not
-a diff.
+Sending lives in a SEPARATE driver (§3.6), not in this one. It did exist as of
+this doc's lifetime — shipped precisely because it could satisfy the review
+below: `ALWAYS_CONFIRM` ∩ `UNATTENDED_DENY`, exact-payload confirmed before the
+wire, no unattached bytes. The day FRIDAY can send mail unattended as you is
+still a design review, not a diff — the unattended half of that gate has not
+moved.
 
 ### 3.3 · The inbox is an injection surface
 
@@ -162,6 +164,44 @@ POST/PATCH/PUT/DELETE, which the driver's one egress function never issues
 
 Use a fine-grained PAT with READ-ONLY repo scope regardless: driver-side GET
 only is defence in depth, not a licence to hand FRIDAY a token that can merge.
+
+### 3.6 · SMTP send — the FIRST write connector (friday/connectors/smtp.py)
+
+A read that misbehaves shows you wrong data. A send that misbehaves publishes
+words in your name, to people, irreversibly. The write contract therefore
+differs from the read contract in kind, not in degree; five rules carry the
+weight, and `tests/test_smtp_connector.py` pins every one:
+
+1. **Wire bytes == confirmed bytes.** `email_send` is in `ALWAYS_CONFIRM`, so
+   the loop shows the exact to/subject/body and demands a yes BEFORE the tool
+   runs. The driver's remaining job is to guarantee the wire carries precisely
+   those bytes: no signature, no footer, no CC, no BCC — the signature has no
+   cc/bcc parameter at all, and a source-scan test asserts the composed
+   message has no such header surface.
+2. **One confirmation = one send.** One SMTP session per call, no driver-side
+   retry (a retried send can silently double-send; failure is reported and the
+   human decides). The result says `undo: none` out loud.
+3. **Injection refused before the socket.** CR/LF in `to`/`subject` would
+   splice `Bcc:` headers into your message; every shape/cap check raises
+   `ValueError` BEFORE any socket exists — a test asserts the transport double
+   was never instantiated across eight hostile inputs.
+4. **TLS from the first byte + secrets never echoed.** SMTP_SSL on 465 means
+   there is no pre-TLS plaintext phase to downgrade; and every smtplib failure
+   is re-raised with a TYPE NAME ONLY, because a typo'd or hostile relay can
+   quote your password back inside its 5xx text (a test embeds the password in
+   a fake server error and asserts it never reaches the launcher).
+5. **The audit trail records THAT, not WHAT.** Each send (or failed send)
+   writes a `connector.sent`/`connector.send_failed` row with recipient and
+   subject — never the body. The audit DB is an artifact the memory compressor
+   can quote; full bodies belong in the Sent folder.
+
+**The scope gap, pinned in tests.** Policy intentionally treats `remote` as
+attended (the user is on their phone), so `ALWAYS_CONFIRM` — which only fires
+for `scope == "interactive"` — silently no-ops over the gateway: an
+`email_send` there would be *allowed with no confirmation*. Until serve grows
+a confirmation round-trip, the LAUNCHER therefore refuses every scope but
+`interactive`, and `test_remote_scope_passes_policy_but_the_launcher_stops_it`
+pins both halves of that fact so it is relaxed by review, never by drift.
 
 ## 4 · The fine-tuning pipeline (friday/tune/)
 
@@ -255,8 +295,10 @@ contract byte-exact without needing the heavy stack.
 
 ## 5 · What this doc deliberately did NOT build
 
-* **email_send / any write connector.** Presence-gated writes are a review of
-  their own.
+* **~~email_send / any write connector.~~** Landed (§3.6) — the review this
+  line reserved for it happened: confirm-then-send with exact bytes, launcher
+  scope-gated until the gateway grows a confirmation channel. Any FURTHER
+  write connector (calendar_write, file sync, …) still gets its own review.
 * **Full shell.** The curated list is the consent surface. Expanding it is a
   sense-grant diff with a test, not a config change.
 * **More connectors.** ~~Calendar (CalDAV)~~ ~~GitHub (REST)~~ — both landed,

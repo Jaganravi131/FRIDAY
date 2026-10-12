@@ -84,7 +84,7 @@ class ToolContext:
     in the data layer, not by asking the model nicely in the prompt."""
 
     conn: sqlite3.Connection
-    scope: str = "interactive"          # interactive|heartbeat|dreaming|eval
+    scope: str = "interactive"          # interactive|remote|heartbeat|dreaming|eval
     session_id: str = ""
     trace_id: str | None = None
     char_start: int | None = None
@@ -604,4 +604,16 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
                 "connector": {"type": "string", "description": "default 'github'"},
             },
         }, github_read))
+        from .connector_tools import EMAIL_SEND_DOC, email_send
+        r.register(ToolSpec("email_send", EMAIL_SEND_DOC, {
+            "type": "object",
+            "properties": {
+                "to": {"type": "array", "items": {"type": "string"},
+                       "description": "plain name@host addresses, at most 5"},
+                "subject": {"type": "string", "description": "≤200 chars, single line"},
+                "body": {"type": "string", "description": "≤20000 chars, sent VERBATIM"},
+                "connector": {"type": "string", "description": "default 'gmail.smtp'"},
+            },
+            "required": ["to", "subject"],
+        }, email_send))
     return r
