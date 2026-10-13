@@ -19,6 +19,7 @@ from typing import Protocol, Sequence
 
 from ..store.db import _STOPWORDS
 from ..util import stem
+from .synonyms import expansions_for
 
 #: ⚠️ `[^\W_]+`, NOT `\w+`. In Python `\w` includes the underscore, so the naive
 #: pattern tokenises the stored predicate `lives_in` as ONE indivisible token. The
@@ -135,10 +136,32 @@ class LexicalReranker:
         #: weak scorer the noise risk is higher, not lower.
         self.recommended_floor = 0.45
 
+    #: ⭐ A pure synonym-bridge match carries a small need-scaled bonus. When a
+    #: candidate shares NO incidental word with the query and the ONLY connection
+    #: is a human-curated relation from `synonyms.py`, that is higher-precision
+    #: evidence than an incidental exact hit, not lower — accidental matches are
+    #: exact ("time" appears everywhere), while a curated bridge fires only where
+    #: a person wrote the relation down. Without this, a query where half the
+    #: content is circumstantial ("what do I drink IN THE MORNING") can never
+    #: cross the floor no matter how exact the bridged half is, because coverage
+    #: caps at 0.5 and 0.62 * 0.5 + overlap tops out around 0.41.
+    #:
+    #: The bonus scales with the UNCOVERED fraction (1 - coverage) and is ZERO
+    #: at full coverage. That shape matters: a flat bonus would crown a bridged
+    #: candidate over an exact one when both cover the query ("what is my rent"
+    #: must rank the rent fact above the lease-end fact, not below it). Here the
+    #: bonus only compensates for query words neither exact nor bridged — the
+    #: circumstantial words a fact cannot be expected to contain — and it can
+    #: never flip a full-coverage tie. It also never fires for an unmapped
+    #: query, so the false-positive gate, not this number, keeps unanswerable
+    #: queries at [].
+    BRIDGE_BONUS = 0.18
+
     def score(self, query: str, candidates: Sequence[str]) -> list[float]:
         if not candidates:
             return []
-        raw = {stem(w) for w in _WORD.findall(query.lower())}
+        raw_words = [w for w in _WORD.findall(query.lower())]
+        raw = {stem(w) for w in raw_words}
         q = raw - _STOPWORDS
         # A query that is ALL stopwords ("what is it") carries no content signal, so
         # fall back to the raw terms rather than scoring against an empty set — the
@@ -147,6 +170,20 @@ class LexicalReranker:
             q = raw
         if not q:
             return [0.0] * len(candidates)
+        # Query words with content standing (raw form kept for the synonym lookup:
+        # "reports" reaches the "report" entry through the stemmer below, but the
+        # lookup itself is on whole words). Everything below is in STEM units, so
+        # when no expansion fires the arithmetic is identical to the old formula.
+        syn_map: dict[str, set[str]] = {}
+        for w in raw_words:
+            s = stem(w)
+            if s in q:
+                syn_map.setdefault(s, set()).update(
+                    stem(e) for e in expansions_for(w))
+        for v in syn_map.values():
+            v -= _STOPWORDS
+        expansions = set().union(*syn_map.values()) if syn_map else set()
+        expansions -= q
         ql = query.lower().strip()
         out = []
         for c in candidates:
@@ -156,10 +193,24 @@ class LexicalReranker:
                 out.append(0.0)
                 continue
             inter = q & ct
-            coverage = len(inter) / len(q)
-            overlap = len(inter) / len(q | ct)
+            bridged = {s for s in q
+                       if s not in ct and syn_map.get(s, set()) & ct}
+            coverage = (len(inter) + len(bridged)) / len(q)
+            hit_expansions = (expansions & ct) - inter
+            # ⭐ Bridged terms count slightly less as SHARED vocabulary than
+            # exact hits do (0.9), while counting fully toward COVERAGE above.
+            # Coverage asks "does the candidate address the query's words" —
+            # a curated relation answers yes. Overlap asks "how much vocabulary
+            # is literally shared" — a hypothesised term is weaker evidence of
+            # sharing than a word both sides actually contain. The practical
+            # effect is tie-breaking: at equal coverage the exact match
+            # outranks the bridged one. With no expansions this reduces exactly
+            # to len(inter) / len(q | ct).
+            overlap = (len(inter) + 0.9 * len(hit_expansions)) / len(q | expansions | ct)
             phrase = 0.15 if ql and ql in cl else 0.0
-            out.append(min(1.0, 0.62 * coverage + 0.38 * (overlap * 2.2) + phrase))
+            bridge = self.BRIDGE_BONUS * (1.0 - coverage) if not inter and bridged else 0.0
+            out.append(min(1.0, 0.62 * coverage + 0.38 * (overlap * 2.2)
+                           + phrase + bridge))
         return out
 
 

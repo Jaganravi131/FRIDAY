@@ -39,6 +39,7 @@ from ..store import db
 from ..util import dedupe, jaccard, now_iso, partial_date
 from .embedders import Embedder, get_embedder
 from .rerankers import Reranker, get_reranker
+from .synonyms import expanded_query
 
 
 @dataclass
@@ -351,11 +352,19 @@ def search(
     if not q.strip():
         return SearchResult([], 0, effective_floor, rr.name, as_of)
 
+    # ⭐ Recall on the EXPANDED query, rerank on the ORIGINAL. "who do I report
+    # to" shares no word with the manager fact, so unexpanded FTS OR-matching
+    # finds nothing and there is nothing to rerank. Appending curated synonyms
+    # (report -> manager) lets recall reach the candidate; the reranker's own
+    # synonym logic then scores the user's words, not ours — which is why echo
+    # detection and coverage denominators below still use `q`, never `qx`.
+    qx = expanded_query(q)
+
     cands: list[Candidate] = []
-    cands += _fts_path(conn, q, k_wide)
-    cands += _vec_path(conn, q, k_wide, emb)
+    cands += _fts_path(conn, qx, k_wide)
+    cands += _vec_path(conn, qx, k_wide, emb)
     if use_graph:
-        cands += _graph_path(conn, q, k_wide)
+        cands += _graph_path(conn, qx, k_wide)
     merged = _merge(cands)
 
     # attach the facts rows so freshness/decay/provenance can be evaluated

@@ -15,15 +15,15 @@ can run on every commit.
 
 ## Baseline
 
-- recorded: 2026-10-01T03:58:15Z
+- recorded: 2026-10-13T14:54:28Z
 - embedder: `hashing` · reranker: `lexical` · floor: 0.45
-- corpus: 13 facts · 27 queries · 5 unanswerable · 0.072s
+- corpus: 13 facts · 27 queries · 5 unanswerable · 65.768s
 
 | metric | value |
 |---|---|
-| `recall_at_1` | 0.8148 |
-| `recall_at_5` | 0.8148 |
-| `mrr` | 0.8148 |
+| `recall_at_1` | 0.963 |
+| `recall_at_5` | 0.963 |
+| `mrr` | 0.963 |
 | `provenance_complete` | 1.0 |
 | `interrogative_gap` | -0.0833 |
 | `false_positive_rate` | 0.0 |
@@ -34,7 +34,7 @@ can run on every commit.
 |---|---|---|
 | interrogative | 1.0 | 11 |
 | noun | 0.9167 | 12 |
-| paraphrase | 0.0 | 4 |
+| paraphrase | 1.0 | 4 |
 
 ## Reading these numbers
 
@@ -49,14 +49,22 @@ can run on every commit.
   pushed it under the floor. Unifying them into `db.CONTENT_STOPWORDS` moved
   interrogative recall@5 0.545 -> 1.000 and overall 0.630 -> 0.815. The gate
   keeps it closed; `tests/test_retrieval.py` pins the invariance itself.
-- **`paraphrase` is now the known defect, and it cannot be bought with a
-  threshold.** Measured: lowering the floor 0.45 -> 0.25 lifts paraphrase to
-  0.25, costs one false positive out of five unanswerable queries, and then
-  plateaus at 0.25 however low the floor goes. Law 4 and the
-  `false_positive_rate` gate both forbid that trade, so the only route is
-  better SIGNAL — lever 4 in doc 15 (a real semantic embedder or
-  cross-encoder, in the optional dependency tier). A hashing embedder has no
-  semantics to find "who do I report to" inside a fact about a manager.
+- **`paraphrase` was the known defect, and it could not be bought with a
+  threshold.** Measured: lowering the floor 0.45 -> 0.25 lifted paraphrase to
+  0.25, cost one false positive out of five unanswerable queries, and then
+  plateaued at 0.25 however low the floor went. Law 4 and the
+  `false_positive_rate` gate both forbade that trade. **CLOSED by
+  query-side synonym bridges** (`friday/retrieval/synonyms.py`): recall runs
+  on the query plus curated related terms (report -> manager, drink ->
+  coffee, code -> editor) and the lexical reranker counts bridged words
+  toward coverage at full weight plus a need-scaled bridge bonus — stdlib,
+  deterministic, no model. The lexicon's curation rules (no co-hyponym
+  crossings like dentist -> doctor, no ambiguous headwords, no temporal
+  coordinates, single-hop) plus this file's `false_positive_rate` gate are
+  what keep it honest; `tests/test_synonyms.py` pins the bridges and the
+  rules. A real semantic embedder (lever 4 in doc 15) remains the route
+  past curated vocabulary, but paraphrase no longer needs it to clear the
+  floor.
 - **`false_positive_rate` must stay at 0.** Law 4: an empty list beats noise.
   A retrieval layer that returns something for an unanswerable query is
   manufacturing raw material for a confabulation, and this is the metric that

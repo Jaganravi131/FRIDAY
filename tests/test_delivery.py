@@ -392,12 +392,21 @@ def test_bench_runs_model_free_and_scores_the_known_defect(tmp_path):
     assert res.by_class["noun"]["recall_at_5"] > 0.8
     assert res.by_class["interrogative"]["recall_at_5"] > 0.8
     assert res.interrogative_gap < 0.1, "natural questions must not retrieve worse than noun phrases"
-    # PARAPHRASE IS STILL THE KNOWN DEFECT, and it is not fixable by threshold.
-    # Lowering the floor to 0.25 lifts paraphrase to 0.25 and costs one false
-    # positive out of five unanswerable queries; it then plateaus at 0.25 no matter
-    # how low the floor goes. Law 4 and the gate both forbid that trade, so the only
-    # route to paraphrase recall is better signal — a real semantic embedder.
-    assert res.by_class["paraphrase"]["recall_at_5"] < 0.3
+    # PARAPHRASE WAS THE KNOWN DEFECT — now closed by query-side synonym
+    # bridges (see friday/retrieval/synonyms.py), the stdlib answer to "better
+    # signal". Recall ran on the user's words, which share nothing with the
+    # stored fact ("who do I report to" vs `manager_name`), and overlap scored
+    # nothing for the same reason. Recall now runs on the expanded query and
+    # the lexical reranker counts bridged words toward coverage at full weight
+    # plus a need-scaled bridge bonus; the curation rules in the module (no
+    # co-hyponym crossings, no ambiguous headwords, no temporal coordinates,
+    # single-hop) plus the false_positive_rate assertion above are what keep
+    # the lexicon honest. tests/test_synonyms.py pins the bridges and the
+    # rules; this pins the number. All four bench paraphrases retrieve at 1.0
+    # on the stdlib path — the bar is set at 0.75 (one miss) so a different
+    # embedder choice downstream does not turn this into a red-by-environment
+    # failure the way an exact 1.0 would.
+    assert res.by_class["paraphrase"]["recall_at_5"] >= 0.75
     # A sanity ceiling, not a performance budget — it exists to fail if the bench ever
     # spawns a subprocess per query or reads the corpus from disk per query, not to
     # grade the machine. Measured on this dev box the same 122-query run is ~0.4 s;
