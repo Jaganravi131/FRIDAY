@@ -19,6 +19,8 @@ where every access is:
 """
 from __future__ import annotations
 
+from ..util import swallowed
+
 from ..connectors import get as _get_connector
 from ..security import Verdict, detect, neutralize
 from ..util import cap_tokens
@@ -252,8 +254,8 @@ def _audit_send(ctx, connector: str, target: str, ok: bool, detail: str) -> None
              action="connector.sent" if ok else "connector.send_failed",
              target=f"{connector} → {target}"[:200], sense_id="email.send",
              decision="allowed", detail=detail[:200])
-    except Exception:
-        pass
+    except Exception as exc:
+        swallowed('friday/agent/connector_tools.py:255', exc, warn=True)
 
 
 def email_send(ctx, to=None, subject: str = "", body: str = "",
@@ -316,5 +318,5 @@ def _audit_withhold(ctx, connector: str, title: str, reason: str) -> None:
         _log(ctx.conn, actor="agent", action="connector.withheld",
              target=f"{connector}: {title[:120]}", sense_id=None,
              decision="denied", detail=f"imported content reads like instructions ({reason})")
-    except Exception:
-        pass
+    except Exception as exc:
+        swallowed('friday/agent/connector_tools.py:319', exc, warn=True)

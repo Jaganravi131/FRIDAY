@@ -25,6 +25,8 @@ Design rules:
 
 from __future__ import annotations
 
+from .util import swallowed
+
 import json
 import os
 import platform
@@ -203,8 +205,8 @@ def gpu_info() -> dict:
                 capture_output=True, text=True, timeout=20)
             for g in json.loads(out.stdout or "{}").get("SPDisplaysDataType", []):
                 names.append(g.get("sppci_model", "Apple GPU"))
-    except Exception:
-        pass                                   # identification is best-effort, never fatal
+    except Exception as exc:
+        swallowed('friday/doctor.py:206', exc)  # identification is best-effort, never fatal
 
     blob = " ".join(names).lower()
     return {

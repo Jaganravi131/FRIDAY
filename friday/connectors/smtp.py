@@ -32,6 +32,8 @@ rule here follows from that asymmetry; they are LOAD-BEARING, not style:
 """
 from __future__ import annotations
 
+from ..util import swallowed
+
 import email.utils
 import re
 import smtplib
@@ -107,8 +109,8 @@ def send(user: str, password: str, host: str,
         finally:
             try:
                 conn.quit()
-            except Exception:
-                pass
+            except Exception as exc:
+                swallowed('friday/connectors/smtp.py:110', exc)
     except smtplib.SMTPAuthenticationError:
         # The fact that auth failed is safe; anything the SERVER said in reply
         # might quote the password back at us, so it never leaves this function.

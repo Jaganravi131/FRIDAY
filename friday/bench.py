@@ -45,6 +45,8 @@ of wall clock, this needs neither and can therefore run on every commit.
 
 from __future__ import annotations
 
+from .util import swallowed
+
 import json
 import os
 import re
@@ -189,8 +191,8 @@ def _predicate_of(cand) -> str:
     if row is not None:
         try:
             return str(row["predicate"])
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/bench.py:192', exc)
     m = re.match(r"\s*-?\s*([a-z_][a-z0-9_]*)\s*:", getattr(cand, "body", "") or "")
     return m.group(1) if m else ""
 

@@ -14,6 +14,8 @@ when it's active — so `Reranker.recommended_floor` exists and the pipeline rea
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import re
 from typing import Protocol, Sequence
 
@@ -180,6 +182,6 @@ def get_reranker(prefer: str = "auto", model_dir: str = "models/reranker") -> Re
     if prefer in ("auto", "onnx"):
         try:
             return OnnxReranker(model_dir)
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/retrieval/rerankers.py:183', exc)
     return LexicalReranker()

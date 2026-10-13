@@ -926,9 +926,12 @@ def test_needle_and_interference_are_reproducible():
     strict=True,
     reason=(
         "BOARD T-010: EraseThenDelta.step's `erase_rank_one=False` branch is a copy of "
-        "the True branch, so the flag changes nothing and any ablation that toggles it "
-        "reports zero difference. Strict: when the alternative is implemented this "
-        "turns into a failure, which is the signal to remove this marker."
+        "the True branch, so the flag changes nothing. The spec is incomplete: doc 13 "
+        "writes the erase as (I - gamma * e * e_hat^T) but never defines e_hat. The True "
+        "branch is exactly the case e_hat = e. Two candidate definitions, each a decision: "
+        "(a) e_hat = q_t, the query-driven erase of arXiv 2608.13668; (b) a separate "
+        "learned read address. Strict: when one is chosen and implemented, this turns "
+        "into a failure, which is the signal to remove the marker."
     ),
 )
 def test_erase_rank_one_flag_changes_the_operator():

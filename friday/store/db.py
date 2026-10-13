@@ -9,6 +9,8 @@ not the index.
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import math
 import sqlite3
 from pathlib import Path
@@ -119,8 +121,8 @@ def _try_enable_vec(conn: sqlite3.Connection) -> bool:
     finally:
         try:
             conn.enable_load_extension(False)
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/store/db.py:122', exc)
 
 
 def _ensure_vec_table(conn: sqlite3.Connection, dim: int) -> bool:

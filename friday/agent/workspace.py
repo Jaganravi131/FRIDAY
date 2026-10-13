@@ -29,6 +29,8 @@ policy.check() — the tiered consent the whole trust model rests on.
 """
 from __future__ import annotations
 
+from ..util import swallowed
+
 import json
 import shlex
 import subprocess
@@ -170,8 +172,8 @@ def _deny(action: str, detail: str) -> None:
         with db.connect(paths.DB_PATH) as conn:
             _audit(conn, actor="agent", action=action, target=detail[:200],
                    sense_id=None, decision="denied", detail="workspace containment")
-    except Exception:
-        pass    # auditing must never be the reason a call fails open or closed
+    except Exception as exc:
+        swallowed('friday/agent/workspace.py:173', exc, warn=True)  # auditing must never be the reason a call fails open or closed
 
 
 def ws_list(ctx, path: str = ".", depth: int = 2) -> dict:

@@ -54,10 +54,13 @@ From doc 20 §5: possessive `'s` handling, a "what time" intent cue, and the wor
 a check that no existing bench number drops. Do not add a word just because a probe missed it.
 
 ### T-005 · Remaining lint debt (Lane Q)  — `partial`
-F841 and F401 are done (above). Still open, in order: `S110` try/except/pass (21 sites:
-each should log, or carry a comment saying why silence is correct) and `BLE001` blind
-`except Exception` (59 sites). Fix a site only with a test that would catch a regression
-in what it swallows. Style-only rules (`I001`, `UP035`, `FURB167`) are low priority.
+F841 and F401 are done (above). **S110 is done for `friday/`**: 19 sites now call
+`friday.util.swallowed(where, exc, warn=…)`, which keeps a bounded record and logs (DEBUG,
+or WARNING for audit writes). `tests/test_swallowed.py` fails on any new bare
+`except Exception: pass` in the package. Two sites in `scripts/` are out of scope and remain.
+Still open: `BLE001` blind `except Exception` (59 sites, unchanged; the new handlers still
+catch broadly on purpose). Fix a site only with a test that would catch a regression in
+what it swallows. Style-only rules (`I001`, `UP035`, `FURB167`) are low priority.
 
 ### T-012 · Two parallel fixes for the same paraphrase defect  — `QUESTION` (decision needed)
 Branch `friday-dev` (commit `d188667`, same GitHub account, not created by this session)
@@ -90,16 +93,22 @@ from 0.0 to 0.2. The gate blocked it. Needs a tokeniser fix that is checked agai
 `AGENTS.md` and this board are the first version, used by this session. Still to prove:
 two different agents closing items through the board as the only handoff channel.
 
-### T-010 · The erase-gate ablation measures nothing (Lane S/G, RSC)  — `open`, **found this session**
-`friday/rsc/operators.py`, `EraseThenDelta.step`: the `erase_rank_one=False` branch is a
-copy of the `True` branch, so the flag changes no output. Confirmed by running both
-(`S` identical). Any ablation that toggles the flag reports zero difference, which means a
-published erase-gate ablation would be a null result by construction.
-*Pinned, not fixed:* `tests/test_rsc.py::test_erase_rank_one_flag_changes_the_operator` is
-a **strict xfail**. The fix needs the intended alternative, and doc 13 does not spell it out
-clearly enough to implement it correctly. Once implemented, the strict xfail fails, which is
-the signal to remove the marker.
-*Acceptance:* the alternative is specified in doc 13, implemented, and the xfail removed.
+### T-010 · The erase-gate ablation measures nothing (RSC)  — `QUESTION` (spec needed)
+`friday/rsc/operators.py`, `EraseThenDelta.step`: the `erase_rank_one=False` branch is a copy
+of the `True` branch, so the flag changes no output. Confirmed by running both (`S` identical).
+Any ablation that toggles the flag reports a null result by construction.
+
+**Why it is not fixed.** Doc 13 writes the erase step as `(I − γ_t e_t ê_tᵀ)` and never defines
+`ê_t`. The code's True branch is exactly the case `ê = e`, which I checked by hand. So the
+False branch has no specification to implement. Two candidates, and the choice is a research call:
+* **(a) `ê_t = q_t`**, the query-driven second erase direction (arXiv 2608.13668, cited in doc 13
+  §2.3). It fits FRIDAY's case: "what's my rent?" erases what is stale about rent.
+* **(b) a separate learned read address**, a second projection from the same `z_t`.
+
+*Pinned:* `tests/test_rsc.py::test_erase_rank_one_flag_changes_the_operator` is a strict xfail.
+The reason string now names both candidates.
+*Acceptance:* the owner of doc 13 picks (a) or (b) and writes the definition; then the operator
+implements it, the xfail is removed, and the ablation is re-run.
 
 ---
 

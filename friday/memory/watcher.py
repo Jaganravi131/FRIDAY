@@ -38,6 +38,8 @@ a wrong fact came from a bad extraction or from your own typo three weeks ago.
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import hashlib
 import sqlite3
 import threading
@@ -313,9 +315,10 @@ class MemoryWatcher:
 
             log(conn, actor="user", action=action, target=str(p),
                 sense_id=None, decision="allowed", detail=detail)
-        except Exception:
-            # Audit must never be the reason a turn fails.
-            pass
+        except Exception as exc:
+            # Audit must never be the reason a turn fails. But a missing audit row with no
+            # trace is a failure nobody can see, so it is recorded at WARNING.
+            swallowed("friday/memory/watcher.py:318", exc, warn=True)
 
     @staticmethod
     def _drop_origin(conn: sqlite3.Connection, origin: str) -> None:
@@ -326,8 +329,8 @@ class MemoryWatcher:
             try:
                 db.fts_delete(conn, r["id"], "fact")
                 db.vec_delete(conn, r["id"])
-            except Exception:
-                pass
+            except Exception as exc:
+                swallowed('friday/memory/watcher.py:329', exc)
         conn.execute("DELETE FROM facts WHERE origin_file=?", (origin,))
         try:
             # Otherwise the compiled-state row outlives the file it describes, and a
@@ -355,8 +358,8 @@ class MemoryWatcher:
                         self.sync(c, force=False)
                     finally:
                         c.close()
-                except Exception:
-                    pass                      # a watcher that crashes the REPL is worse than none
+                except Exception as exc:
+                    swallowed('friday/memory/watcher.py:358', exc)  # a watcher that crashes the REPL is worse than none
                 self._stop.wait(self.interval_s)
 
         self._thread = threading.Thread(target=loop, name="friday-memory-watcher",

@@ -20,6 +20,8 @@ because FTS5 is doing nearly all the work.
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import hashlib
 import json
 import math
@@ -153,13 +155,13 @@ def get_embedder(dim: int = 1024, prefer: str = "auto") -> Embedder:
             se = ServerEmbedder(dim=dim)
             if se.alive():
                 return se
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/retrieval/embedders.py:156', exc)
         if prefer == "server":
             return HashingEmbedder(dim)
     if prefer in ("auto", "st"):
         try:
             return SentenceTransformerEmbedder(dim=dim)
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/retrieval/embedders.py:163', exc)
     return HashingEmbedder(dim)

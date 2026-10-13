@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 import re
 import time
+from collections import deque
 from datetime import datetime
 from typing import Any, Iterable
 
@@ -220,3 +222,27 @@ def stem(word: str) -> str:
     if len(w) > 3 and w.endswith("e") and any(ch in "aiouy" for ch in w[:-1]):
         w = w[:-1]
     return w
+
+
+# ── swallowed errors ──────────────────────────────────────────────────────────
+# Some failures must not take the turn down: an audit row that cannot be written, a
+# cleanup that fails after the answer is known, an optional backend that is absent.
+# Swallowing those is a design decision. Swallowing them INVISIBLY is not: a missing
+# audit row with no trace is a failure nobody can see. Every such site calls
+# `swallowed()`, which keeps a bounded in-process record and logs once at DEBUG (or
+# WARNING for audit writes). `tests/test_swallowed.py` forbids a bare `except …: pass`.
+
+_log = logging.getLogger("friday")
+_SWALLOWED: deque = deque(maxlen=200)
+
+
+def swallowed(where: str, exc: BaseException, *, warn: bool = False) -> None:
+    """Record an error we have decided not to propagate. `where` is `file:line`."""
+    _SWALLOWED.append((where, type(exc).__name__, str(exc)[:200]))
+    _log.log(logging.WARNING if warn else logging.DEBUG,
+             "swallowed at %s: %s: %s", where, type(exc).__name__, exc)
+
+
+def swallowed_recent() -> list[tuple[str, str, str]]:
+    """The most recent swallowed errors, oldest first. For `friday doctor` and tests."""
+    return list(_SWALLOWED)

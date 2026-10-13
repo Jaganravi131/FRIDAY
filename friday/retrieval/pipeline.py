@@ -21,6 +21,8 @@ primitive, and this file is its implementation.
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import re
 import sqlite3
 from dataclasses import dataclass, field
@@ -224,8 +226,8 @@ def _graph_path(conn: sqlite3.Connection, q: str, k: int, hops: int = RETRIEVAL_
                 for a in json.loads(r["aliases"] or "[]"):
                     if t in str(a).lower():
                         seeds.append(r["id"])
-            except Exception:
-                pass
+            except Exception as exc:
+                swallowed('friday/retrieval/pipeline.py:227', exc)
     if not seeds:
         return []
 

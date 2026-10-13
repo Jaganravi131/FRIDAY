@@ -20,6 +20,8 @@ Scope decisions that are LOAD-BEARING, not incidental:
 """
 from __future__ import annotations
 
+from ..util import swallowed
+
 import email
 import email.header
 import email.utils
@@ -174,9 +176,9 @@ class GmailConnector(Connector):
         finally:
             try:
                 imap.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                swallowed('friday/connectors/gmail.py:177', exc)
             try:
                 imap.logout()
-            except Exception:
-                pass
+            except Exception as exc:
+                swallowed('friday/connectors/gmail.py:181', exc)

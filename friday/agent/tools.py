@@ -14,6 +14,8 @@ so this tool is the only exact memory FRIDAY has (Law 2b).
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import os
 import sqlite3
 from dataclasses import dataclass
@@ -285,8 +287,8 @@ def read_artifact(ctx: ToolContext, name: str, max_tokens: int = 2000) -> dict:
             _log(ctx.conn, actor="agent", action="tool.read_artifact", target=safe,
                  sense_id=None, decision="denied",
                  detail=f"withheld: {rep.summary()}")
-        except Exception:
-            pass    # auditing must never be the reason a tool call fails
+        except Exception as exc:
+            swallowed('friday/agent/tools.py:288', exc, warn=True)  # auditing must never be the reason a tool call fails
         return {"error": (f"withheld '{safe}': it reads like instructions rather than "
                           f"data ({rep.summary()}). Not injected into context."),
                 "withheld": rep.as_dict()}
@@ -325,8 +327,8 @@ def contain_untrusted(ctx: ToolContext, text: str, *, origin: str, target: str,
             _log(ctx.conn, actor="agent", action=f"tool.{origin}", target=target,
                  sense_id=None, decision="denied",
                  detail=f"withheld: {rep.summary()}")
-        except Exception:
-            pass            # auditing must never be the reason a tool call fails
+        except Exception as exc:
+            swallowed('friday/agent/tools.py:328', exc, warn=True)  # auditing must never be the reason a tool call fails
         return {"error": (f"withheld '{target}': it reads like instructions rather than "
                           f"data ({rep.summary()}). Not injected into context."),
                 "withheld": rep.as_dict()}

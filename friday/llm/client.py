@@ -13,6 +13,8 @@ rather than letting it fall through to a silent hallucination.
 
 from __future__ import annotations
 
+from ..util import swallowed
+
 import json
 import re
 import urllib.error
@@ -523,8 +525,8 @@ def get_client(prefer: str = "auto", **kw: Any) -> Client:
             c = OpenAICompatibleClient(**kw)
             if c.alive():
                 return c
-        except Exception:
-            pass
+        except Exception as exc:
+            swallowed('friday/llm/client.py:526', exc)
         if prefer == "http":
             return OpenAICompatibleClient(**kw)
     return MockClient()
