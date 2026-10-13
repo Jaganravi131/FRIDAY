@@ -59,10 +59,32 @@ each should log, or carry a comment saying why silence is correct) and `BLE001` 
 `except Exception` (59 sites). Fix a site only with a test that would catch a regression
 in what it swallows. Style-only rules (`I001`, `UP035`, `FURB167`) are low priority.
 
-### T-008 · Phase 0 SKIP conditions (user runs)  — `blocked (hardware)`
-Condition 11 (RSS after an hour idle, with a real model loaded) and condition 2 need the
-user's machine. CI's comment says two conditions skip, but the script reports one.
-Reconcile the comment with the script in the same change.
+### T-012 · Two parallel fixes for the same paraphrase defect  — `QUESTION` (decision needed)
+Branch `friday-dev` (commit `d188667`, same GitHub account, not created by this session)
+adds `friday/retrieval/synonyms.py`, a curated human-word → store-vocabulary map with six
+curation rules. It does what T-001 does, by a different route. Both touch `pipeline.py`,
+`rerankers.py`, `bench.py`, `test_delivery.py` and `BENCHMARKS.md`, so they conflict.
+
+Measured on the same held-out probes (run once each, scratch copy of `friday-dev`):
+
+| Implementation | Committed bench paraphrase | Committed bench overall | Probe 1 (contaminated for T-001) | Probe 2 |
+|---|---|---|---|---|
+| `friday-dev` synonym bridges | 1.00 (n = 4) | 0.963 | 0.25 | 0.42 |
+| This branch, concept lexicon | 0.75 (n = 4) | 0.926 | 0.58 | 0.50 |
+
+Neither is shown to generalise better. The committed set is too small to decide, and probe 1
+is biased toward this branch. The blind set (T-002) is the thing that can decide it.
+*Not done:* merging either branch. Each is someone else's decision to make. A combined
+version (their curation rules applied to our cluster approach) is possible and is a
+reasonable next step if the blind set is in place.
+
+### T-008 · Phase 0 SKIP conditions  — `done`
+CI's comment said conditions 11 and 2 skip. The script reports one skip (11). Condition 2 is
+automated and passes. The CI comment is now corrected to match the script.
+
+### T-004 learning · possessive residue  — `reverted`
+See doc 20 §5a. Dropping the stray `s` from reranker query terms raised bench false positives
+from 0.0 to 0.2. The gate blocked it. Needs a tokeniser fix that is checked against the gate.
 
 ### T-009 · Multi-agent coordination — start using the board (Lane Q)  — `partial`
 `AGENTS.md` and this board are the first version, used by this session. Still to prove:

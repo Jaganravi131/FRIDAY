@@ -77,6 +77,10 @@ numbers by hand.** Record only after the gate passes and you have explained the 
   generalises.
 * **Hard-coding the answer.** A lexicon entry that exists only because a bench query
   failed is overfitting. Ask whether the word belongs in the language, not the corpus.
+* **Removing a token that was acting as a penalty.** A stray or uncovered term lowers
+  scores. Removing it raises every score, including the unanswerable ones. Dropping
+  `s` from `flat's` raised bench false positives from 0 to 0.2 (doc 20 §5a). Any change to
+  term counting must run the false-positive gate, not just the recall numbers.
 * **Lowering a floor to buy recall.** Law 4: an empty list beats noise. Any change that
   raises `false_positive_rate` above 0 is rejected, however good the recall looks.
 * **Wrapping a crash in a fallback that hides it.** Degrade loudly (see `SECURITY.md`).

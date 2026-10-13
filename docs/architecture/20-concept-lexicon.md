@@ -98,6 +98,19 @@ Probe 2's misses are vocabulary the lexicon lacks, not ranking mistakes:
 Each is a lexicon or tokenisation gap. None is solved by lowering the floor, and each
 should be handled by the owner of the retrieval lane, with a test added first.
 
+## 5a · A fix that was tried and reverted
+
+*Possessive residue.* "who is my flat's owner" tokenises to `flat`, `s`, `owner`. The stray
+`s` counted as an uncovered query term, and the score was 0.35 against 0.83 for "who is my
+landlord". Dropping single-character tokens in the reranker (as `fts_terms` already does)
+lifted that case, and **raised `false_positive_rate` from 0.0 to 0.2** on the bench. The
+`s` was pulling down the scores of unanswerable questions. Their scores were too high, and
+the floor was doing the job the residue did by accident. The change was reverted. The
+gate caught it, as designed.
+
+The correct fix is a tokeniser change that handles possessives in both layers, measured
+against the false-positive gate. Do not drop a token to raise a score without that check.
+
 ## 6 · Next levers, in order
 
 1. **Blind holdout (T-002).** Without it the numbers above cannot be trusted past the
