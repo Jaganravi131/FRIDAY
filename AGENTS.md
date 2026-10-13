@@ -80,6 +80,11 @@ numbers by hand.** Record only after the gate passes and you have explained the 
 * **Lowering a floor to buy recall.** Law 4: an empty list beats noise. Any change that
   raises `false_positive_rate` above 0 is rejected, however good the recall looks.
 * **Wrapping a crash in a fallback that hides it.** Degrade loudly (see `SECURITY.md`).
+* **Assuming `with sqlite3.connect(...)` closes the connection.** It does not: the context
+  manager only commits. The open handle makes temp-directory cleanup fail on Windows
+  (`WinError 32`), while Linux passes silently, so the suite is green locally and red in
+  CI. Close the connection in a `finally`, as `friday/bench.py` does. The Linux guard
+  `test_the_harness_leaves_no_open_handle_on_its_temp_root` checks for this.
 * **Using `hash()` for anything reproducible.** Use `friday.util._stable_seed`.
 * **Committing user data.** `memory/`, `soul/`, `artifacts/` and `capture/` stay out of
   git. CI checks this; do not work around the check.

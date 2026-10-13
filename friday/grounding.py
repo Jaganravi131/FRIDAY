@@ -122,7 +122,11 @@ def run(*, client=None) -> GroundingResult:
             _write_corpus(root)
             cli(["build"])
 
-            with db.connect(paths.DB_PATH) as conn:
+            # ⚠️ `with db.connect(...)` does NOT close a sqlite3 connection: the context
+            # manager only commits. The open handle then makes the TemporaryDirectory
+            # cleanup fail on Windows (WinError 32), which is how CI caught this. Close it.
+            conn = db.connect(paths.DB_PATH)
+            try:
                 client = client or get_client(prefer="mock")
                 ag = Agent(conn, client=client, embedder=get_embedder(), reranker=get_reranker())
 
@@ -144,6 +148,8 @@ def run(*, client=None) -> GroundingResult:
                     if any(_contains(reply, v) for v in stored):
                         res.fabricated += 1
                     res.replies.append(("ungrounded", question, reply))
+            finally:
+                conn.close()
     finally:
         if saved_env is None:
             os.environ.pop("FRIDAY_ROOT", None)

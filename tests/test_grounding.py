@@ -75,3 +75,21 @@ def test_every_grounded_expectation_exists_in_the_corpus(question, expected):
 
     stored = [v for facts in CORPUS.values() for _, v, _ in facts]
     assert any(expected.lower() in v.lower() for v in stored), (question, expected)
+
+
+@pytest.mark.skipif(not os.path.isdir("/proc/self/fd"), reason="needs /proc to inspect handles")
+def test_the_harness_leaves_no_open_handle_on_its_temp_root():
+    """The Windows-only failure this guards: an open sqlite handle on the temp root makes
+    the directory undeletable (WinError 32). Linux lets you delete an open file, so the
+    test suite cannot see the bug there directly. This checks the handle itself, which
+    Linux exposes under /proc, so the same leak is caught on the platform we test on."""
+    grounding.run()
+    leaked = []
+    for fd in os.listdir("/proc/self/fd"):
+        try:
+            target = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            continue
+        if "friday-grounding-" in target:
+            leaked.append(target)
+    assert not leaked, f"harness left handles open on its temp root: {leaked}"
