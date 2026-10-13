@@ -15,7 +15,6 @@ and every tag-based reader of the context mis-parsed it. The defence was the pay
 from __future__ import annotations
 
 import os
-import re
 
 import pytest
 

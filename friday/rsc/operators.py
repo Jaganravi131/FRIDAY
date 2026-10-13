@@ -45,7 +45,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 Vector = list[float]
 Matrix = list[list[float]]   # (rows, cols)
@@ -342,8 +342,6 @@ class EraseThenDelta(Operator):
         self.erase_rank_one = erase_rank_one
 
     def step(self, s: State, g: Gates) -> tuple[State, Vector]:
-        k = l2_normalise(g.k)
-
         # 1. diagonal decay
         cur = mat_scale_rows(s.S, g.alpha)
 

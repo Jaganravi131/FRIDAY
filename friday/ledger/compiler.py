@@ -26,7 +26,7 @@ from ..config import (
 from ..memory.decay import decay_row
 from ..util import approx_tokens, now_iso, short_hash
 from . import ladder
-from .slots import SLOT_ORDER, STABLE_SLOTS, Slot, SlotSet
+from .slots import SLOT_ORDER, Slot, SlotSet
 
 
 @dataclass

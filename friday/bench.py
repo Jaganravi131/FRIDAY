@@ -439,7 +439,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--file", default=None, help=f"path to {BENCH_FILE}")
     args = ap.parse_args(argv)
 
-    from friday import paths
 
     path = Path(args.file) if args.file else (
         Path(__file__).resolve().parent.parent / BENCH_FILE)

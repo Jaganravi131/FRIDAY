@@ -30,7 +30,6 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
-from .model import RSCConfig, RetentionStateCompiler
 from .operators import (
     ABLATION_LADDER,
     OPERATOR_NAMES,
@@ -208,7 +207,6 @@ def probe_needle(op, d_k: int = 32, d_v: int = 32, length: int = 512,
     decay curve is believed: at overlap > 0 distractors write a little into the
     needle's direction, which is the regime where the erase gate starts to matter.
     """
-    rng = random.Random(seed)
     per_depth: dict[int, float] = {}
 
     # The needle owns basis direction 0 on BOTH axes, so it is exactly orthogonal to
@@ -280,7 +278,6 @@ def probe_interference(op, d_k: int = 32, d_v: int = 32, n_old: int = 4,
     is not binding on FRIDAY's data and you should ship rung 3 or 4 — cheaper, and
     better supported. That is a useful result, not a failure.
     """
-    rng = random.Random(seed)
     s = State(d_k, d_v)
     if n_old + n_new > min(d_k, d_v):
         raise ValueError(

@@ -41,7 +41,6 @@ from .operators import (
     build,
     dot,
     l2_normalise,
-    mat_scale_rows,
     rms_norm,
     sigmoid,
 )
@@ -220,14 +219,12 @@ class RetentionStateCompiler:
             prev = window[-1] if window else None
             h_cur = xin
 
-            concat_heads: list[float] = []
             for L in range(c.n_layers):
                 a_raw = self.decay_proj[L](h_cur)
                 b_raw = self.erase_proj[L](h_cur)
                 w_raw = self.write_proj[L](h_cur)
 
                 for h in range(c.n_heads):
-                    sl = slice(h * c.d_k, (h + 1) * c.d_k)
                     q = l2_normalise([swish(v) for v in qs[h]])
                     k = l2_normalise([swish(v) for v in ks[h]])
                     if prev is not None:

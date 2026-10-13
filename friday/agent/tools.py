@@ -14,7 +14,6 @@ so this tool is the only exact memory FRIDAY has (Law 2b).
 
 from __future__ import annotations
 
-import json
 import os
 import sqlite3
 from dataclasses import dataclass

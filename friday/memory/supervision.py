@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
 
 from ..util import new_id, now_iso
 
@@ -203,7 +202,6 @@ def export_training_set(conn: sqlite3.Connection, out_path) -> dict:
     import json
 
     from ..memory.decay import policy_alpha
-    from ..config import predicate_class_of
 
     p = Path(out_path)
     p.parent.mkdir(parents=True, exist_ok=True)

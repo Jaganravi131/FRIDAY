@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .. import paths
 from ..util import approx_tokens, cap_tokens, new_id, short_hash

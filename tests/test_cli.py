@@ -544,7 +544,6 @@ def test_canonicalisation_is_conservative(cli):
     _, out = cli(["status"], expect=0)
     assert "facts (live)" in out
     # both survived as distinct facts
-    import sqlite3
     from friday import paths
     from friday.store import db
     conn = db.connect(paths.DB_PATH)

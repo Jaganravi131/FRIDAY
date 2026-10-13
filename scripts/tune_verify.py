@@ -38,9 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -386,7 +384,10 @@ def main() -> int:
         raise SystemExit("need a handful of rows; this is a smoke test, not a vacuum test")
 
     print("== Act 3 · attach LoRA + train on real memory ==")
-    import torch
+    # Deliberately kept although not referenced by name: this is the availability check
+    # for the training stack. Without it a missing torch fails deeper in the run, with a
+    # less useful error. F401 flags it; it is a probe, not a stale import.
+    import torch  # noqa: F401
     model = build_model(tok.vocab_size, args.block)
     if not args.no_lora:
         model = attach_lora(model)

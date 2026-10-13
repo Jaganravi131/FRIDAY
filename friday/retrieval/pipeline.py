@@ -24,7 +24,6 @@ from __future__ import annotations
 import re
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Sequence
 
 from ..config import (
@@ -36,7 +35,7 @@ from ..config import (
 )
 from ..memory.decay import decay_row
 from ..store import db
-from ..util import dedupe, jaccard, now_iso, partial_date
+from ..util import jaccard, now_iso, partial_date
 from .concepts import expand_terms
 from .embedders import Embedder, get_embedder
 from .rerankers import Reranker, get_reranker

@@ -47,7 +47,6 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .. import paths
-from ..util import now_iso
 from . import compiler
 
 

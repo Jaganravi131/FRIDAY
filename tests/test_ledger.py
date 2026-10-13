@@ -17,7 +17,6 @@ Three properties carry the design:
 """
 from __future__ import annotations
 
-import pytest
 
 from friday.config import LEDGER_BUDGET_TOKENS, LEDGER_RESERVE_TOKENS, LEDGER_SLOTS
 from friday.ledger import ladder

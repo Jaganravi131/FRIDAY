@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from friday.agent import policy, tools, workspace
+from friday.agent import policy, workspace
 from friday.agent.tools import ToolContext, build_registry
 from friday.store import db
 
@@ -33,7 +33,6 @@ def _grant(*sense_ids):
 @pytest.fixture
 def ws(root):
     """A workspace folder inside the isolated root, with the senses granted."""
-    from friday import paths
     wdir = root / "friday-workspace"
     wdir.mkdir(parents=True, exist_ok=True)
     with db.connect(root / "artifacts" / "friday.db") as conn:

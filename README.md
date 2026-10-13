@@ -84,7 +84,12 @@ Everything else: `python -m friday --help`, and the subcommand list at the top o
 
 ## 📐 The Blueprint
 
-**Status: architecture complete, implementation not started.**
+**Status: Phase 0 is implemented and gated.** The memory, retrieval, ledger, agent loop,
+policy engine, connectors and retrieval regression gate all run and are tested (669 tests;
+CI green on Ubuntu and Windows, Python 3.11–3.13). What is not done is the model track:
+the language model, the fine-tune and the RSC run on the user's hardware, not in CI. The
+live work board is [docs/coordination/BOARD.md](docs/coordination/BOARD.md); the rules for
+any agent or person changing the code are in [AGENTS.md](AGENTS.md).
 
 Everything below is researched, sourced, and sized against real hardware.
 

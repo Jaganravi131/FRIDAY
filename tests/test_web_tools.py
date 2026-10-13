@@ -283,7 +283,6 @@ def test_web_read_and_wiki_reject_empty_input(conn, ctx):
 
 def test_web_read_end_to_end_against_the_local_server(local_server, conn, ctx, monkeypatch):
     """Full path: tool -> guard -> fetch -> strip -> detect -> neutralize -> cap."""
-    from friday.agent import tools as T
 
     # The tool hardcodes no allow_private, and must not: for the test we relax the guard
     # at the netguard layer only, which is exactly the documented escape hatch.

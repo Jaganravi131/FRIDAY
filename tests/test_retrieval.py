@@ -321,13 +321,20 @@ def test_dropped_stale_is_counted(conn):
     assert_fact(conn, Fact(subject="user", predicate="mood", object="tired",
                            source_kind="stated", source_quote="I am so tired"))
     r0 = _search(conn, "mood")
+    # Before the correction there is nothing stale to withhold.
+    assert any("tired" in c.body for c in r0.kept), [c.body for c in r0.kept]
+    assert r0.dropped_stale == 0
+
     assert_fact(conn, Fact(subject="user", predicate="mood", object="energised",
                            source_kind="user_edit", source_quote="actually I feel energised"))
     r1 = _search(conn, "mood")
 
     assert any("energised" in c.body for c in r1.kept), [c.body for c in r1.kept]
-    assert r1.dropped_stale >= 0
-    assert isinstance(r1.dropped_stale, int)
+    assert not any("tired" in c.body for c in r1.kept), (
+        "the superseded fact must not auto-surface for a present-tense question")
+    # Exactly the one withheld fact is counted. The previous assertion here was
+    # `dropped_stale >= 0`, which is true of every integer and could never fail.
+    assert r1.dropped_stale == 1, r1.dropped_stale
 
 
 def test_retracted_facts_never_ship_as_current(conn):

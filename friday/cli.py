@@ -44,10 +44,10 @@ from pathlib import Path
 from . import paths
 from .util import now_iso
 from .config import LEDGER_BUDGET_TOKENS, RETRIEVAL_K_SHIP, canonical_predicate
-from .ledger.compiler import Gather, Ledger
+from .ledger.compiler import Ledger
 from .llm.client import get_client
 from .memory import compiler as mcompiler
-from .memory import provenance, watcher as memory_watcher
+from .memory import provenance
 from .memory.facts import Fact, assert_fact, beliefs_at, facts_at, history_of
 from .memory.supervision import export_training_set, ready_for_phase_3_5, supervision_report
 from .memory.traces import TraceWriter, behavioural_signals
@@ -545,7 +545,6 @@ def cmd_senses(args) -> int:
     and says "ask, don't assume", and before this there was no way to answer.
     """
     from .agent.policy import enabled_senses, grant, revoke
-    from .store import db
 
     conn = _conn(args)
     granted = set(enabled_senses(conn))

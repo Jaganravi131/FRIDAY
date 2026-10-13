@@ -255,10 +255,9 @@ def _parse_argv(cmd: str) -> list[str]:
     # loudly rather than parsed cleverly.
     try:
         return shlex.split(cmd or "", posix=True)
-    except ValueError as e:
+    except ValueError:
+        # The caller (ws_exec) turns [] into an explicit "unparseable" error.
         return []
-    finally:
-        pass
 
 
 def ws_shell(ctx, command: str) -> dict:

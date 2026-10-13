@@ -24,7 +24,7 @@ import math
 import pytest
 from pathlib import Path
 
-from friday.rsc.ablation import _gates, _rel_err
+from friday.rsc.ablation import _gates
 from friday.rsc.operators import (
     ABLATION_LADDER,
     OPERATOR_NAMES,
@@ -531,9 +531,13 @@ def test_salience_class_balances():
     cheap = l_salience([0.01] * 10, [0] * 10)
     # missing the rare positives must cost more than missing the common negatives
     missed_pos = l_salience([0.01] * 10, [1] + [0] * 9)
-    missed_neg = l_salience([0.01, 0.99] + [0.01] * 8, [1, 0] + [0] * 8)
+    # One common negative mispredicted, the rare positive found. This is the case the
+    # comment above is about. (The previous `missed_neg` input also missed the positive,
+    # so it was not a negative-only error and could not test the claim.)
+    wrong_neg = l_salience([0.99, 0.99] + [0.01] * 8, [1, 0] + [0] * 8)
     assert missed_pos > cheap
     assert missed_pos > 0.1, "a missed positive must hurt"
+    assert missed_pos > wrong_neg, "missing the rare positive must cost more than one negative error"
 
 
 def test_erase_loss_weights_address_distinct_pairs_higher():
@@ -916,3 +920,31 @@ def test_needle_and_interference_are_reproducible():
         "GDN-2's erase is anchored to the write key and cannot reach an orthogonal address"
     assert e.detail["retain_old"] == 0.5, \
         "EDA's independent erase address can — this is the rung-5 claim"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "BOARD T-010: EraseThenDelta.step's `erase_rank_one=False` branch is a copy of "
+        "the True branch, so the flag changes nothing and any ablation that toggles it "
+        "reports zero difference. Strict: when the alternative is implemented this "
+        "turns into a failure, which is the signal to remove this marker."
+    ),
+)
+def test_erase_rank_one_flag_changes_the_operator():
+    """Found by reading the code, then confirmed by running it: both branches produce
+    identical state, so the ablation that depends on the flag is measuring nothing."""
+    from friday.rsc.operators import EraseThenDelta, Gates, State
+
+    def run(flag):
+        op = EraseThenDelta(erase_rank_one=flag)
+        s = State(4, 4)
+        ones = [1.0] * 4
+        s, _ = op.step(s, Gates(q=[1, 0, 0, 0], k=[0, 1, 0, 0], v=[0, 0, 1, 0],
+                                alpha=ones, b=ones, w=ones, beta=1.0))
+        s, _ = op.step(s, Gates(q=[0, 1, 0, 0], k=[1, 0, 0, 0], v=[0, 0, 0, 1],
+                                alpha=ones, b=ones, w=ones, beta=1.0,
+                                e=[0, 1, 0, 0], gamma_e=0.5))
+        return s.S
+
+    assert run(True) != run(False)

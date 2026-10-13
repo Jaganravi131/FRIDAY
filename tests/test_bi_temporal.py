@@ -7,7 +7,6 @@ properties the RSC's independently-addressed erase gate needs as training signal
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timedelta, timezone
 
 from friday.config import predicate_class_of

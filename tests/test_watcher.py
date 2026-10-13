@@ -129,6 +129,12 @@ def test_only_the_edited_file_is_rederived(store, isolated_paths):
     work_rows = conn.execute(
         "SELECT id FROM facts WHERE origin_file=?", (str(work),)).fetchall()
     assert work_rows, "work.md's facts must survive a housing.md edit"
+    # The snapshot taken before the edit was previously computed and never read. An
+    # untouched file's facts must keep their belief time: re-asserting them on every
+    # sync would rewrite history for facts that did not change.
+    for r in work_rows:
+        assert conn.execute("SELECT asserted_at FROM facts WHERE id=?", (r["id"],)).fetchone()[
+            "asserted_at"] == before[r["id"]], f"work fact {r['id']} was re-asserted"
 
 
 def test_a_broken_hand_edit_does_not_take_the_turn_down(store):
@@ -315,7 +321,6 @@ def test_stop_is_idempotent_and_a_daemon_thread_never_blocks_exit(store):
 def test_a_crashing_poll_pass_is_swallowed(store, monkeypatch):
     """A watcher that takes the REPL down with it is worse than no watcher."""
     conn, f = store
-    from friday import paths
 
     w = watcher.MemoryWatcher(interval_s=0.05)
 

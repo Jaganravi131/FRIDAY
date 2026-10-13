@@ -92,7 +92,6 @@ def _bind(root: Path):
 def check_1_rebuild(ctx: Ctx) -> Check:
     c = Check(1, "rm -rf artifacts && rebuild && ask -> correct answer")
     from friday import paths
-    from friday.llm import get_client
     from friday.memory import compiler
     from friday.memory.facts import Fact, assert_fact
     from friday.store import db
@@ -269,8 +268,6 @@ def check_6_hand_edit(ctx: Ctx) -> Check:
     c = Check(6, "hand-edit a facts file, save, ask immediately — no restart")
     from friday.agent.loop import Agent
     from friday.llm import get_client
-    from friday.memory import watcher
-    from friday.memory.facts import Fact, assert_fact
     from friday.retrieval.embedders import get_embedder
     from friday.retrieval.rerankers import get_reranker
 
@@ -465,7 +462,6 @@ def check_9_audit_today(ctx: Ctx) -> Check:
 def check_10_model_dies(ctx: Ctx) -> Check:
     c = Check(10, "kill the model mid-turn -> graceful, loud, no silent garbage")
     from friday.agent.loop import Agent
-    from friday.llm import Response
     from friday.retrieval.embedders import get_embedder
     from friday.retrieval.rerankers import get_reranker
 

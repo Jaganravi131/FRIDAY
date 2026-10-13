@@ -14,7 +14,7 @@ import pytest
 from friday import paths
 from friday.agent import policy
 from friday.agent.tools import ToolContext
-from friday.connectors import Item, known, get
+from friday.connectors import known, get
 from friday.store import db
 
 

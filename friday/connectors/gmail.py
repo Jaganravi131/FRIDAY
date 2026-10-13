@@ -24,7 +24,6 @@ import email
 import email.header
 import email.utils
 import imaplib
-import socket
 from email.message import Message
 
 from . import Connector, Item, config_help, load_config, register
