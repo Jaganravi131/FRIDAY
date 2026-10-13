@@ -392,12 +392,13 @@ def test_bench_runs_model_free_and_scores_the_known_defect(tmp_path):
     assert res.by_class["noun"]["recall_at_5"] > 0.8
     assert res.by_class["interrogative"]["recall_at_5"] > 0.8
     assert res.interrogative_gap < 0.1, "natural questions must not retrieve worse than noun phrases"
-    # PARAPHRASE IS STILL THE KNOWN DEFECT, and it is not fixable by threshold.
-    # Lowering the floor to 0.25 lifts paraphrase to 0.25 and costs one false
-    # positive out of five unanswerable queries; it then plateaus at 0.25 no matter
-    # how low the floor goes. Law 4 and the gate both forbid that trade, so the only
-    # route to paraphrase recall is better signal — a real semantic embedder.
-    assert res.by_class["paraphrase"]["recall_at_5"] < 0.3
+    # PARAPHRASE WAS THE KNOWN DEFECT (0.00 when this test was written). It is no longer
+    # a threshold problem: the concept lexicon (friday/retrieval/concepts.py, doc 20)
+    # supplies the missing signal, so "report to" can reach a `manager_name` fact. That
+    # is a better signal, which is the route this assertion always asked for. It is now
+    # a RATCHET: paraphrase may not fall back below the measured value. The rest of the
+    # gap is vocabulary the lexicon does not yet cover, and is recorded in doc 20.
+    assert res.by_class["paraphrase"]["recall_at_5"] >= 0.5
     # A sanity ceiling, not a performance budget — it exists to fail if the bench ever
     # spawns a subprocess per query or reads the corpus from disk per query, not to
     # grade the machine. Measured on this dev box the same 122-query run is ~0.4 s;

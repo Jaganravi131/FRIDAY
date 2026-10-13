@@ -37,6 +37,7 @@ from ..config import (
 from ..memory.decay import decay_row
 from ..store import db
 from ..util import dedupe, jaccard, now_iso, partial_date
+from .concepts import expand_terms
 from .embedders import Embedder, get_embedder
 from .rerankers import Reranker, get_reranker
 
@@ -352,7 +353,10 @@ def search(
         return SearchResult([], 0, effective_floor, rr.name, as_of)
 
     cands: list[Candidate] = []
-    cands += _fts_path(conn, q, k_wide)
+    # Recall widens with the concept lexicon ("report" also searches "manager"); the
+    # reranker below still judges against the user's own words, mapped to concepts.
+    expansion = expand_terms(_content_words(q))
+    cands += _fts_path(conn, (q + " " + " ".join(expansion)) if expansion else q, k_wide)
     cands += _vec_path(conn, q, k_wide, emb)
     if use_graph:
         cands += _graph_path(conn, q, k_wide)

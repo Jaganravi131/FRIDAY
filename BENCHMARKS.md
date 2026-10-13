@@ -15,15 +15,15 @@ can run on every commit.
 
 ## Baseline
 
-- recorded: 2026-10-01T03:58:15Z
+- recorded: 2026-10-13T14:12:06Z
 - embedder: `hashing` · reranker: `lexical` · floor: 0.45
-- corpus: 13 facts · 27 queries · 5 unanswerable · 0.072s
+- corpus: 13 facts · 27 queries · 5 unanswerable · 0.099s
 
 | metric | value |
 |---|---|
-| `recall_at_1` | 0.8148 |
-| `recall_at_5` | 0.8148 |
-| `mrr` | 0.8148 |
+| `recall_at_1` | 0.9259 |
+| `recall_at_5` | 0.9259 |
+| `mrr` | 0.9259 |
 | `provenance_complete` | 1.0 |
 | `interrogative_gap` | -0.0833 |
 | `false_positive_rate` | 0.0 |
@@ -34,7 +34,7 @@ can run on every commit.
 |---|---|---|
 | interrogative | 1.0 | 11 |
 | noun | 0.9167 | 12 |
-| paraphrase | 0.0 | 4 |
+| paraphrase | 0.75 | 4 |
 
 ## Reading these numbers
 
@@ -49,14 +49,13 @@ can run on every commit.
   pushed it under the floor. Unifying them into `db.CONTENT_STOPWORDS` moved
   interrogative recall@5 0.545 -> 1.000 and overall 0.630 -> 0.815. The gate
   keeps it closed; `tests/test_retrieval.py` pins the invariance itself.
-- **`paraphrase` is now the known defect, and it cannot be bought with a
-  threshold.** Measured: lowering the floor 0.45 -> 0.25 lifts paraphrase to
-  0.25, costs one false positive out of five unanswerable queries, and then
-  plateaus at 0.25 however low the floor goes. Law 4 and the
-  `false_positive_rate` gate both forbid that trade, so the only route is
-  better SIGNAL — lever 4 in doc 15 (a real semantic embedder or
-  cross-encoder, in the optional dependency tier). A hashing embedder has no
-  semantics to find "who do I report to" inside a fact about a manager.
+- **`paraphrase` was the known defect; a better SIGNAL now closes part of it.**
+  Lowering the floor cannot buy it (0.45 -> 0.25 lifts paraphrase to 0.25 and
+  costs a false positive). The concept lexicon (`friday/retrieval/concepts.py`,
+  doc 20) maps "report" and "manager" to one concept, so "who do I report to"
+  reaches a manager fact with no model. It is a hand-written floor, not a
+  semantic embedder: a real embedder (doc 15, lever 4) is still the target for
+  the vocabulary the lexicon does not cover.
 - **`false_positive_rate` must stay at 0.** Law 4: an empty list beats noise.
   A retrieval layer that returns something for an unanswerable query is
   manufacturing raw material for a confabulation, and this is the metric that

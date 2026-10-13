@@ -19,6 +19,7 @@ from typing import Protocol, Sequence
 
 from ..store.db import _STOPWORDS
 from ..util import stem
+from .concepts import concept_of_stem
 
 #: ⚠️ `[^\W_]+`, NOT `\w+`. In Python `\w` includes the underscore, so the naive
 #: pattern tokenises the stored predicate `lives_in` as ONE indivisible token. The
@@ -147,17 +148,28 @@ class LexicalReranker:
             q = raw
         if not q:
             return [0.0] * len(candidates)
+        # Coverage is judged over CONCEPTS, not literal words: "report" in a question
+        # and "manager" in a fact are the same concept. Stopwords were already removed
+        # above, on stems, so the mapping only ever sees content terms.
+        #
+        # ⚠️ Coverage keeps DUPLICATE concept hits on the query side (a list, not a set).
+        # "rent" and "monthly" both map to one concept; collapsing them to a set made
+        # "what do I pay in rent each month" lose a term it had earned, and the
+        # invariance test in test_retrieval.py caught it. Overlap still uses sets.
+        q_terms = [concept_of_stem(s) for s in q]
+        q_set = set(q_terms)
         ql = query.lower().strip()
         out = []
         for c in candidates:
             cl = c.lower()
-            ct = {stem(w) for w in _WORD.findall(cl)}
+            ct = {concept_of_stem(stem(w)) for w in _WORD.findall(cl)}
             if not ct:
                 out.append(0.0)
                 continue
-            inter = q & ct
-            coverage = len(inter) / len(q)
-            overlap = len(inter) / len(q | ct)
+            hits = sum(1 for t in q_terms if t in ct)
+            coverage = hits / len(q_terms)
+            inter = q_set & ct
+            overlap = len(inter) / len(q_set | ct)
             phrase = 0.15 if ql and ql in cl else 0.0
             out.append(min(1.0, 0.62 * coverage + 0.38 * (overlap * 2.2) + phrase))
         return out
