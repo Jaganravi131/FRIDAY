@@ -449,6 +449,9 @@ CONTENT_STOPWORDS = frozenset({
     # conversational filler that never identifies a fact
     "please", "tell", "know", "remember", "think", "guess", "maybe", "actually",
     "just", "really", "very", "also", "still", "even",
+    # frequency adverbs: they say how often, not what. "what do I usually drink" must
+    # not carry an uncovered term for `usually` (doc 20 §5).
+    "usually", "normally", "generally", "often", "sometimes",
 })
 
 #: Back-compat alias. The underscored name was imported by rerankers.py and asserted on

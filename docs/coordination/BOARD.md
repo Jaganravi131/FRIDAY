@@ -48,10 +48,16 @@ embedder. Keep the hashing baseline as a row beside it. Doc 20 §6 explains why 
 comparison is the result worth keeping. *Blocked here:* model weights cannot be downloaded
 in this sandbox. Agents may prepare the script; the user runs it.
 
-### T-004 · Lexicon coverage gaps (Lane R)  — `open`
-From doc 20 §5: possessive `'s` handling, a "what time" intent cue, and the words
-*program*, *usually*, *have*. **Each word gets a test first**, a benign negative case, and
-a check that no existing bench number drops. Do not add a word just because a probe missed it.
+### T-004 · Lexicon coverage gaps (Lane R)  — `done`
+Doc 20 §5: possessive `'s`, the "what time" cue, and `program` / `usually`. All four are
+fixed, each test-first with a benign negative: `util.strip_possessives` on both sides,
+frequency adverbs in `CONTENT_STOPWORDS` plus a reranker fix (stopwords were matched on
+stems, so "usually" never matched), a `time` concept from any clock time in the candidate,
+and `program`/`programme` in the editor cluster. Plus the leak the possessive fix exposed:
+generic field words (`name`/`number`/`date`) no longer cover a fact when the query has
+something specific. Bench: `my standup time` became a hit — MRR/recall@1 0.9259 → 0.963,
+paraphrase unchanged (0.75, n=4), FP 0.0. Caveat: these cases came from probe 2's misses,
+so they show the mechanism is fixed, not that retrieval generalises. That is T-002.
 
 ### T-005 · Remaining lint debt (Lane Q)  — `partial`
 F841 and F401 are done (above). **S110 is done for `friday/`**: 19 sites now call
@@ -85,9 +91,11 @@ reasonable next step if the blind set is in place.
 CI's comment said conditions 11 and 2 skip. The script reports one skip (11). Condition 2 is
 automated and passes. The CI comment is now corrected to match the script.
 
-### T-004 learning · possessive residue  — `reverted`
+### T-004 learning · possessive residue  — `reverted`, since fixed by T-004
 See doc 20 §5a. Dropping the stray `s` from reranker query terms raised bench false positives
-from 0.0 to 0.2. The gate blocked it. Needs a tokeniser fix that is checked against the gate.
+from 0.0 to 0.2. The gate blocked it. The tokeniser fix (`strip_possessives`) has now landed
+with the generic-field-word rule that closes the leak; this entry stays as the record of why
+you do not drop a token to raise a score.
 
 ### T-009 · Multi-agent coordination — start using the board (Lane Q)  — `partial`
 `AGENTS.md` and this board are the first version, used by this session. Still to prove:

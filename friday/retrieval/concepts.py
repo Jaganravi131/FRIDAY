@@ -28,6 +28,8 @@ Rules, each enforced by ``tests/test_concepts.py``:
 
 from __future__ import annotations
 
+import re
+
 from ..util import stem
 
 #: cluster name -> surface words. Keep this list short and reviewable; add a word only
@@ -52,6 +54,10 @@ CLUSTERS: dict[str, tuple[str, ...]] = {
     ),
     "code_editor": (
         "editor", "ide", "vim", "neovim", "emacs", "code", "coding", "programming",
+        # "program" is ambiguous (a TV program). It is here because in a question about
+        # where the user types code it means the editor. Both spellings: the user writes
+        # British English. The benign negative test pins the TV reading.
+        "program", "programme",
     ),
     "doctor": (
         "doctor", "doctors", "physician", "treat", "treats", "treating", "ill", "sick",
@@ -73,7 +79,22 @@ CLUSTERS: dict[str, tuple[str, ...]] = {
     "team": (
         "team", "squad",
     ),
+    # "what time" asks for a clock time. A fact that stores one ("Tuesday 09:30 IST")
+    # carries the concept too; see `text_concepts`. Only the word is listed here.
+    "time": (
+        "time",
+    ),
 }
+
+#: Words that name a KIND of field, not a subject. Every `*_name` predicate carries `name`,
+#: so a query whose only shared word is `name` matches every name fact. Such a word counts
+#: toward coverage only when nothing more specific is in the query (see the reranker).
+GENERIC_FIELD_WORDS: frozenset = frozenset({"name", "number", "date"})
+
+#: A clock time in running text: 09:30, 10:00, 10am, 7 pm. Decimals (1.50) and bare
+#: numbers (18000) are deliberately not clock times.
+_CLOCK = re.compile(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\s?(?:am|pm)\b", re.IGNORECASE)
+_TIME_CONCEPT = "c:time"
 
 #: surface word -> cluster name, keyed by the STEMMED surface form so that the lookup
 #: agrees with `util.stem`, which the reranker applies to both sides of every comparison.
@@ -94,6 +115,19 @@ def concept_of_stem(s: str) -> str:
     """
     name = _CLUSTER_OF.get(s)
     return f"c:{name}" if name else s
+
+
+def text_concepts(text: str) -> set[str]:
+    """Every concept key a candidate text carries, for the reranker's coverage check.
+
+    Words map through the lexicon. A clock time also carries the `time` concept, so a
+    question about "the time" can be covered by a fact that holds one, without the fact
+    having to contain the word "time".
+    """
+    out = {concept_key(w) for w in re.findall(r"[^\W_]+", (text or "").lower())}
+    if _CLOCK.search(text or ""):
+        out.add(_TIME_CONCEPT)
+    return out
 
 
 def concept_key(word: str) -> str:

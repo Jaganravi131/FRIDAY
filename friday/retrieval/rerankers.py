@@ -20,8 +20,8 @@ import re
 from typing import Protocol, Sequence
 
 from ..store.db import _STOPWORDS
-from ..util import stem
-from .concepts import concept_of_stem
+from ..util import stem, strip_possessives
+from .concepts import GENERIC_FIELD_WORDS, concept_of_stem, text_concepts
 
 #: ⚠️ `[^\W_]+`, NOT `\w+`. In Python `\w` includes the underscore, so the naive
 #: pattern tokenises the stored predicate `lives_in` as ONE indivisible token. The
@@ -141,8 +141,18 @@ class LexicalReranker:
     def score(self, query: str, candidates: Sequence[str]) -> list[float]:
         if not candidates:
             return []
-        raw = {stem(w) for w in _WORD.findall(query.lower())}
-        q = raw - _STOPWORDS
+        # ⚠️ Stopwords are checked on the SURFACE word, as `fts_terms` does. Checking them
+        # after stemming silently failed for any stopword whose stem differs: "usually"
+        # stems to "usual", so it was never filtered and counted as an uncovered term.
+        words = _WORD.findall(strip_possessives(query.lower()))
+        raw = {stem(w) for w in words}
+        q = {stem(w) for w in words if w not in _STOPWORDS}
+        # A field-kind word ("name", "number", "date") covers a fact only when the query has
+        # nothing more specific. "my sister's name" is about a sister; `name` alone would
+        # match every name fact in the store. See doc 20 §5a and GENERIC_FIELD_WORDS.
+        specific = q - {stem(g) for g in GENERIC_FIELD_WORDS}
+        if specific:
+            q = specific
         # A query that is ALL stopwords ("what is it") carries no content signal, so
         # fall back to the raw terms rather than scoring against an empty set — the
         # same fallback `fts_terms` uses, for the same reason.
@@ -163,8 +173,8 @@ class LexicalReranker:
         ql = query.lower().strip()
         out = []
         for c in candidates:
-            cl = c.lower()
-            ct = {concept_of_stem(stem(w)) for w in _WORD.findall(cl)}
+            cl = strip_possessives(c.lower())
+            ct = text_concepts(cl)
             if not ct:
                 out.append(0.0)
                 continue

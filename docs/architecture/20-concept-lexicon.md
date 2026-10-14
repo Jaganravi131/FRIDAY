@@ -84,19 +84,41 @@ test that found it, and it is the reason this is recorded here, not just in the 
 * **The real generalisation number needs a blind set.** One that a different agent writes,
   before the change, and that the retrieval agent cannot read. That is board item T-002.
 
-## 5 · What it does not cover (the honest gap)
+## 5 · What it does not cover, and what now closes three of the four
 
-Probe 2's misses are vocabulary the lexicon lacks, not ranking mistakes:
+Probe 2's misses were four mechanisms, not four ranking mistakes. Each now has a
+test first (`tests/test_concepts.py`) and a fix in the layer where the mechanism lives:
 
-* "what do I usually have to **drink**" — `drink` is in the cluster, but the fact is
-  `coffee_order`, and `usually` / `have` do not reach it.
-* "what program do I **type my code** in" — `program` is not a cluster word here.
-* "who is my **flat's owner**" — the possessive `flat's` does not stem to `flat`.
-* "what time is the **scrum**" — the question asks for a time, and `standup_day` stores
-  a day and a time together.
+* **Possessive `'s`** — *fixed.* `util.strip_possessives` removes the clitic on the
+  query and candidate sides before tokenising, so `flat's` → `flat`, `what's` → `what`.
+  The stray `s` no longer counts as an uncovered term. It exposed a leak (§5a), which
+  needed the next fix.
+* **Generic field words** — *fixed alongside.* `name` / `number` / `date` name a kind of
+  field, not a subject; every `*_name` predicate carries `name`. The reranker now drops
+  them from coverage when the query has something more specific, and keeps them when
+  it has nothing else ("what is my name" still works). Pinned on a family of five
+  unanswerable subjects, not one case.
+* **Frequency adverbs** — *fixed.* `usually`, `normally`, `generally`, `often`,
+  `sometimes` say how often, not what. They were failing twice: they were not in
+  `CONTENT_STOPWORDS`, and the reranker checked stopwords *after* stemming, so
+  "usually" → "usual" never matched. The reranker now filters on the surface word,
+  matching `fts_terms`, as its own docstring already required.
+* **Clock time** — *fixed.* `concepts.text_concepts` gives any candidate holding a
+  clock time (09:30, 10am) the `time` concept, so "what time is the scrum" is covered
+  by a fact that stores a day and a time. Decimals and bare numbers are not clock times.
 
-Each is a lexicon or tokenisation gap. None is solved by lowering the floor, and each
-should be handled by the owner of the retrieval lane, with a test added first.
+What is still open:
+
+* `program` / `programme` is in the editor cluster, with a benign negative pinning the
+  TV reading ("what program is on TV tonight" must not clear the floor on it alone).
+* None of this is held-out evidence. The cases came from probe 2's misses, so they show
+  the mechanism is fixed, not that retrieval generalises. That needs the blind set (T-002).
+
+Result on the committed bench: `my standup time` moved from a miss to a hit, so
+recall@1/@5 and MRR rose 0.9259 → 0.963. Paraphrase recall@5 is unchanged at 0.75 (n=4).
+False positives stayed 0.0. Exactly one query moved; the per-query diff is the check.
+
+Each gap is a lexicon or tokenisation gap. None is solved by lowering the floor.
 
 ## 5a · A fix that was tried and reverted
 
@@ -111,12 +133,18 @@ gate caught it, as designed.
 The correct fix is a tokeniser change that handles possessives in both layers, measured
 against the false-positive gate. Do not drop a token to raise a score without that check.
 
+**Update.** That tokeniser fix has now landed (`strip_possessives`), and it did raise the
+false positive exactly as warned: "what is my sister's name" cleared the floor for the
+manager fact, because `name` matches every `*_name` predicate. The fix was the generic
+field-word rule (§5), not a higher floor. Gate stays at 0.0. The lesson survives: a token
+that looks like noise may be load-bearing, and the gate is how you find out which.
+
 ## 6 · Next levers, in order
 
 1. **Blind holdout (T-002).** Without it the numbers above cannot be trusted past the
    first cycle.
-2. **Possessive and intent handling** in `_content_words`: strip `'s`, and treat "what
-   time" as a temporal cue.
+2. **Blind validation of the §5 fixes.** They repair known mechanisms; only T-002 can say
+   whether that is the same as getting better. Do not add another lexicon word until it exists.
 3. **Semantic embedder on the user's machine (T-003).** Run `friday bench` with the
    `embed` extra and record a second baseline. This is the lever the lexicon is a
    stand-in for, and the comparison between the two is itself the result worth keeping.

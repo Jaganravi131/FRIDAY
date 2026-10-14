@@ -224,6 +224,20 @@ def stem(word: str) -> str:
     return w
 
 
+_POSSESSIVE = re.compile(r"(?<=\w)['’]s\b", re.IGNORECASE)
+
+
+def strip_possessives(text: str) -> str:
+    """Drop the English possessive/contraction clitic: ``flat's`` -> ``flat``, ``what's`` ->
+    ``what``. Applied to the query AND the candidate before tokenising, so both sides agree.
+
+    Without it, ``flat's`` tokenises to ``flat`` plus a stray ``s``. That ``s`` counts as an
+    uncovered query term and drags a correct match under the floor. Only the clitic is
+    removed. A plural possessive (``the boss' desk``) is left alone on purpose.
+    """
+    return _POSSESSIVE.sub("", text or "")
+
+
 # ── swallowed errors ──────────────────────────────────────────────────────────
 # Some failures must not take the turn down: an audit row that cannot be written, a
 # cleanup that fails after the answer is known, an optional backend that is absent.
