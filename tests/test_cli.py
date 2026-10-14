@@ -52,7 +52,7 @@ def test_parser_covers_every_documented_subcommand():
     expected = {
         "build", "rebuild", "seed", "ask", "chat", "write", "search", "why",
         "history", "timecheck", "status", "audit", "export", "ablation", "needle",
-        "doctor", "serve", "bench", "senses", "connectors", "tune",
+        "doctor", "serve", "bench", "senses", "connectors", "tune", "holdout",
     }
     assert expected <= have, f"missing: {sorted(expected - have)}"
     assert have - expected == set(), f"undocumented: {sorted(have - expected)}"
@@ -75,6 +75,7 @@ def _required_args(name):
         "ask": ["hello"], "chat": [], "write": ["mood", "fine"],
         "search": ["rent"], "why": [], "history": ["mood"],
         "timecheck": ["2026-01-01"],
+        "holdout": ["--file", "holdout.jsonl"],
     }.get(name, [])
 
 

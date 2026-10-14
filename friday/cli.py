@@ -23,6 +23,8 @@ Subcommands:
     senses     ⭐ tiered consent — see, grant and revoke what FRIDAY may perceive
     bench      ⭐ the retrieval regression gate. Law 10 says every fine-tune must
                re-run the needle test; this makes "must" a nonzero exit code.
+    holdout    score a blind retrieval holdout (T-002) — aggregates only, and the
+               file must live outside this repository so it stays blind
     connectors ⭐ external accounts (gmail first) — status and config help, never
                prints a secret
     tune       ⭐ the personal fine-tuning pipeline — export instruction data from
@@ -659,6 +661,16 @@ def cmd_bench(args) -> int:
     return bench_main(argv)
 
 
+def cmd_holdout(args) -> int:
+    """`friday holdout` — score a blind holdout the tuning agent cannot read (T-002)."""
+    from .holdout import main as holdout_main
+
+    argv = ["--file", args.file]
+    if args.json:
+        argv.append("--json")
+    return holdout_main(argv)
+
+
 def cmd_serve(args) -> int:
     """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
 
@@ -773,6 +785,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.add_argument("--verbose", action="store_true", help="per-query results")
     p.add_argument("--file", default=None, help="BENCHMARKS.md path")
+
+    p = sub.add_parser("holdout", help="score a blind retrieval holdout (T-002)")
+    p.set_defaults(fn=cmd_holdout); common(p)
+    p.add_argument("--file", required=True, help="holdout JSONL, outside the repository")
+    p.add_argument("--json", action="store_true")
 
     p = sub.add_parser("serve", help="⭐ the HTTP gateway — reach FRIDAY from your phone")
     p.set_defaults(fn=cmd_serve); common(p)

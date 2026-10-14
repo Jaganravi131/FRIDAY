@@ -33,13 +33,19 @@ Everything below is about the system around the model, plus the evaluation that 
 
 ## Open — ordered by leverage
 
-### T-002 · Blind holdout set for retrieval (Lane E)  — `open`, **highest priority**
+### T-002 · Blind holdout set for retrieval (Lane E)  — `partial`, **highest priority**
 Every number in doc 20 is weaker than it looks, because the lexicon was tuned on the
 same agent's probes. Write **40+ paraphrase queries and 10+ unanswerable queries**, with
 the expected predicate, **in a file no retrieval agent edits**. Write them *before*
 looking at the current results. Report recall@5 before and after the next change.
-*Not done in this session on purpose:* an agent that wrote the holdout and then graded
-the change would be the same agent twice. It needs a different agent or the user.
+**Harness done:** `friday holdout --file PATH` (`friday/holdout.py`, `tests/test_holdout.py`).
+It refuses a file inside the repo, validates the schema without echoing content, and
+reports aggregates only — no query ever appears in its output. Small holdouts warn
+instead of pretending to measure. JSONL format, one row per query:
+`{"query": "...", "expected": "<bench predicate or null>", "class": "paraphrase"}`.
+*Still needed:* the content. Not written in this session on purpose — an agent that
+wrote the holdout and then graded the change would be the same agent twice. It needs
+a different agent or the user.
 *Acceptance:* a holdout that Lane R can run but not read or edit, plus its first number.
 
 ### T-003 · Semantic embedder comparison on the user's machine (Lane L, user runs)  — `blocked (weights)`
