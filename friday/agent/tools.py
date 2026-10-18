@@ -149,7 +149,9 @@ Use when the user states a preference, a fact about themselves, a decision they 
 
 Do NOT use for: transient task state, things true only this session, general knowledge, or anything you are inferring without evidence.
 
-Writes to memory/facts/<domain>.md with provenance linking this turn. Triggers bi-temporal reconciliation: a conflicting current fact is RETRACTED (never deleted) and the response tells you which one won, so you can tell the user."""
+Writes to memory/facts/<domain>.md with provenance linking this turn. Triggers bi-temporal reconciliation: a conflicting current fact is RETRACTED (never deleted) and the response tells you which one won, so you can tell the user.
+
+Facts ONLY. A procedure, pitfall, or the user's correction about a CLASS of task belongs in a skill, not in facts — `friday dream` distills those after the session; say the correction out loud and it will be captured."""
 
 
 def memory_write(

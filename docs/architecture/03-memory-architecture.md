@@ -28,6 +28,9 @@ FRIDAY/                                  ← git repo = truth
 │   └── index.json                    file → hash, for incremental recompile
 │
 ├── skills/<name>/SKILL.md            S3  procedure            on activation only
+├── dreams/                           distilled-skill DRAFTS   ships nowhere (T-024)
+│   ├── skills/<name>/                proposed new skills      + PROPOSAL.json (why)
+│   └── patches/<name>/               proposed replacements    promoted only by the user
 ├── eval/                             THE LOCKED SUITE         agent has NO write access
 │   ├── suites/*.yaml
 │   ├── graders/*.py

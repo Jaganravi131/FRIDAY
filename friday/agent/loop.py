@@ -14,6 +14,7 @@ Two deliberate choices worth defending:
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -179,6 +180,19 @@ class Agent:
                          recent_turns=[t["content"] for t in st.transcript[-4:]])
             st.retrieved = res.as_dicts()
             self.on_event("retrieved", {"count": len(res), "summary": res.summary()})
+            # S3 activation telemetry: a skill whose body shipped counts as
+            # used (Hermes's .usage.json, on the columns the index orders by).
+            # Best effort by contract — telemetry must never fail a turn.
+            _skill_hits = [d["ref"][6:] for d in st.retrieved
+                           if d.get("kind") == "skill"
+                           and str(d.get("ref", "")).startswith("skill:")]
+            if _skill_hits:
+                try:
+                    from ..memory.skills import record_activations
+                    record_activations(self.conn, _skill_hits)
+                except Exception:  # noqa: BLE001 — see the comment above
+                    logging.getLogger(__name__).debug(
+                        "skill activation bump failed", exc_info=True)
         else:
             st.retrieved = []
             self.on_event("retrieved", {"count": 0,

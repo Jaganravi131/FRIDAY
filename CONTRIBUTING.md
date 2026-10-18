@@ -14,7 +14,7 @@ invariants, and they fail in the permissive direction.
 
 ```bash
 pip install pytest pytest-subtests        # that is the whole dependency list
-python -m pytest tests/ -q                # ~670 tests, ~25 seconds
+python -m pytest tests/ -q                # ~840 tests, ~25 seconds
 python scripts/phase0_exit_test.py        # the 12-condition Phase 0 gate
 ```
 
@@ -133,7 +133,7 @@ friday/
 docs/architecture/   14 documents; 00-BLUEPRINT is the index
 scripts/       phase0_exit_test.py, needle_test.py, rsc_ablation.py
 eval/          the locked suite (Law 6)
-tests/         ~670 tests
+tests/         ~840 tests
 ```
 
 `friday/commands/` holds the packaged needle/ablation implementations. `scripts/`

@@ -16,6 +16,11 @@ EPISODES = MEMORY / "episodes"    # S1  summarised days      YYYY-MM-DD.md
 FACTS = MEMORY / "facts"          # S2  bi-temporal facts    <domain>.md
 DAILY = MEMORY / "daily"          # ephemeral log (NOT auto-injected)
 SKILLS = ROOT / "skills"          # S3  agentskills.io format
+DREAMS = ROOT / "dreams"          # dreaming output: proposed skill DRAFTS.
+#                                  Never in the ledger, never in FTS. A dream
+#                                  writes here and ONLY here (doc 21 §3 — the
+#                                  stable-prefix law); `friday skills --promote`
+#                                  is the user's hands-on-diff gate into skills/.
 CONFIG = ROOT / "config"
 EVAL = ROOT / "eval"              # THE LOCKED SUITE — read-only to the agent
 
@@ -50,7 +55,7 @@ def rebind(new_root) -> None:
     """
     import sys
 
-    global ROOT, SOUL, MEMORY, TRACES, EPISODES, FACTS, DAILY, SKILLS, CONFIG, EVAL
+    global ROOT, SOUL, MEMORY, TRACES, EPISODES, FACTS, DAILY, SKILLS, DREAMS, CONFIG, EVAL
     global ARTIFACTS, DB_PATH, TRUTH_DIRS, ARTIFACT_DIRS
 
     new_root = Path(new_root)
@@ -62,6 +67,7 @@ def rebind(new_root) -> None:
     FACTS = MEMORY / "facts"
     DAILY = MEMORY / "daily"
     SKILLS = new_root / "skills"
+    DREAMS = new_root / "dreams"
     CONFIG = new_root / "config"
     EVAL = new_root / "eval"
     ARTIFACTS = new_root / "artifacts"

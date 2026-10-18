@@ -71,17 +71,64 @@ cannot say when it applies can never be routed to.
 
 ---
 
-## 2. What FRIDAY adopted (T-022, T-023)
+## 2. What FRIDAY adopted (T-022, T-023, T-024)
 
 | Hermes idea | FRIDAY implementation | The FRIDAY difference |
 |---|---|---|
 | SKILL.md format + index | `friday/memory/skills.py`, `skills` table, STABLE ledger slot, `friday skills` CLI (T-022) | Validation is load-bearing (bad skill → reported, never half-registered); the index is an **injection surface**, so a hostile `when_to_use` is withheld (same boundary as core_memory); re-register preserves `uses` |
 | Background review | `friday/memory/review.py`, `friday review` (T-023), scope=`dreaming` | Honesty lives in the **data layer**: the review runs on the same session, so a write whose `source_quote` is not in the reviewed turns is **denied by the policy engine**, not discouraged by prompt text |
+| **Skill review** (`_SKILL_REVIEW_PROMPT` — "Be ACTIVE", signals, preference order) | `friday/memory/distill.py` + `friday dream` (T-024) | See §2.1 below — three gates Hermes does not have |
+| **Read-before-write** (their `skill_manage` refuses a patch without a fresh `skill_view`) | enforced by construction (§2.1 gate 2) | a flag can be forgotten; a skill body that was never in the prompt cannot be patched |
+| **Write-origin provenance** (ContextVar: review-fork writes vs user-directed writes) | structural: dreams write only under `dreams/`, promotion is a separate user-run command | the origin distinction is a directory, not a runtime flag |
+| **Usage telemetry** (`.usage.json` sidecar: active→stale→archived, pins) | `record_activations()` on the `uses`/`last_used` columns the index already orders by (T-024) | no sidecar to desync; bumps only ACTIVE skills; best-effort — telemetry never fails a turn |
 | Prompt fragments | adapted with attribution in the module docstrings | — |
 | Skills as user-owned | user hand-edits `skills/<name>/SKILL.md`; the watcher re-registers on the next compile (same rule as `soul/`) | Hermes's edit-by-chat is *not* adopted — see §3 |
 
 Both halves shipped with the bench at ratchet (recall@1 0.963) — an empty
 skill set compiles the byte-identical prompt it always did.
+
+### 2.1 The lesson layer (T-024) — the loop's second half
+
+Their skill review is where their self-improvement actually lives: most
+sessions produce at least one skill update, user corrections are FIRST-CLASS
+skill signals, and a consulted-but-wrong skill gets patched NOW. FRIDAY
+adopts the whole prompt discipline (procedure first; a pitfall is a
+generalizable imperative + one clause of WHY, never an incident narrative;
+the same lesson learned twice is ONE rule; fix in place, never "UPDATE:";
+do-not-capture) — and adds three gates their architecture has no place to put:
+
+1. **Provenance.** A proposal carries `source_quotes`, and every one is
+   checked with `policy.quote_is_user_authorised` against the turns being
+   reviewed — the exact function that gates `memory_write`. A distilled
+   "the user prefers X" the user never said is denied, audited
+   (`dream.skill_denied`), and writes nothing.
+2. **Read-before-write by construction.** The distill prompt embeds only the
+   N most-used skill bodies (char-budgeted); a patch is accepted only for a
+   skill whose body WAS embedded. Their guard is a session flag set by a
+   `skill_view` call; FRIDAY's is the prompt itself.
+3. **The stable-prefix law.** A dream writes under `dreams/` and only there —
+   never `skills/`. The draft is not registered, not in FTS, not in the
+   ledger; the prompt is byte-identical. It goes live only via
+   `friday skills --promote NAME` (re-validated, `PROPOSAL.json` kept beside
+   the skill as the durable why, audited `memory.skill_promoted`, actor
+   **user**). Hermes's review fork edits the live library directly; FRIDAY's
+   user holds the diff — which is what doc 06's governance ladder demands of
+   the manual rung.
+
+`friday dream` runs both seeds in one tick (fact review, then distillation).
+Scheduling it (their trigger is session-end, in the background) is still a
+user decision: Q2 — the default tier is a 2.6B local model and dreaming is a
+model job. Until then it is a command, not a daemon.
+
+### 2.2 Not adopted, Hermes-side self-improvement machinery
+
+The **background curator** (consolidation at scale, auto-stale/archive by
+usage) is real engineering but premature: FRIDAY's library is user-gated by
+construction, so sprawl needs a library first. Deferred with the doc 06
+G-gates, which are the blueprint's own version of the same lifecycle. The
+**skill hub** (install skills from ClawHub/GitHub) is a supply-chain surface
+this project's SECURITY.md posture rejects outright (same law as the
+self-update rejection in T-017).
 
 ## 3. What FRIDAY rejected, with the law each breaks
 

@@ -126,13 +126,28 @@ def parse_skill(path: Path) -> tuple[Skill, list[str]]:
     registering it anyway would put a dead entry in every turn's index.
     """
     text = path.read_text(encoding="utf-8")
+    skill, problems = parse_skill_text(
+        text, fallback_name=path.parent.name,
+        path=str(path.relative_to(paths.ROOT)))
+    return skill, problems
+
+
+def parse_skill_text(text: str, *, fallback_name: str = "",
+                     path: str = "") -> tuple[Skill, list[str]]:
+    """Pure parser — the validation contract, independent of any file location.
+
+    `fallback_name` is the directory convention for on-disk skills; a DRAFT
+    (distill.py) passes none, so a missing frontmatter `name:` fails the
+    grammar instead of inheriting whatever directory it happens to sit in.
+    """
     problems: list[str] = []
-    skill = Skill(name=path.parent.name, path=str(path.relative_to(paths.ROOT)))
+    skill = Skill(name=fallback_name, path=path)
     m = _FRONTMATTER.match(text)
     if not m:
         return skill, [("no --- frontmatter block (agentskills.io format: "
                         "name, description, version, when_to_use)")]
     fm = m.group("fm")
+    skill.name = _parse_scalar(fm, "name") or fallback_name
     skill.description = _parse_scalar(fm, "description")
     skill.when_to_use = _parse_scalar(fm, "when_to_use")
     skill.triggers = _parse_list(fm, "triggers")
@@ -272,3 +287,122 @@ def skills_index(conn: sqlite3.Connection | None, *, budget_tokens: int = 192) -
     if dropped:
         out += f"\n[{dropped} skill(s) withheld: read like instructions, not skills]"
     return out
+
+
+# ── dreaming: activation telemetry + the promotion gate (T-024) ────────────────
+
+
+def record_activations(conn: sqlite3.Connection, names: list[str]) -> int:
+    """Bump `uses`/`last_used` for skills whose body actually shipped this turn.
+
+    Hermes keeps this in a sidecar `.usage.json` "so telemetry stays out of
+    user-authored SKILL.md" (tools/skill_usage.py); FRIDAY already has the
+    columns, so the telemetry lives where the index ordering reads it. Best
+    effort by contract (callers wrap it): telemetry must never fail a user
+    turn. Only ACTIVE skills count — a retired skill gaining uses would be
+    evidence against retiring it, collected after the decision.
+    """
+    from ..util import now_iso
+
+    if not names:
+        return 0
+    now = now_iso()
+    bumped = 0
+    for n in sorted(set(names)):
+        cur = conn.execute(
+            "UPDATE skills SET uses = uses + 1, last_used = ? "
+            "WHERE name = ? AND status = 'active'", (now, n))
+        if cur.rowcount and cur.rowcount > 0:
+            bumped += cur.rowcount
+    conn.commit()
+    return bumped
+
+
+def list_drafts() -> list[dict]:
+    """Pending dream drafts, newest last. Ships nowhere — this is the queue
+    `friday skills` shows so the user remembers to promote or discard."""
+    import json as _json
+
+    out: list[dict] = []
+    for kind, sub in (("create", "skills"), ("patch", "patches")):
+        base = paths.DREAMS / sub
+        if not base.exists():
+            continue
+        for d in sorted(p for p in base.iterdir() if p.is_dir()):
+            prop = {}
+            pj = d / "PROPOSAL.json"
+            if pj.exists():
+                try:
+                    prop = _json.loads(pj.read_text(encoding="utf-8"))
+                except ValueError:
+                    prop = {}
+            out.append({
+                "kind": kind, "name": d.name, "dir": str(d),
+                "quotes": prop.get("quotes", []),
+                "rationale": prop.get("rationale", ""),
+            })
+    return out
+
+
+def promote_draft(conn: sqlite3.Connection, name: str) -> tuple[bool, str]:
+    """THE promotion gate: move a dream draft into `skills/` and re-register.
+
+    This is the user's hands-on-the-diff moment (doc 06 governance ladder,
+    manual rung). A dream can propose; only this command — run by a human —
+    makes a draft live. Re-validates the draft with the same parser
+    registration uses, keeps the PROPOSAL.json beside the skill as the durable
+    record of why it exists, and removes the spent dream.
+    """
+    import shutil
+
+    from ..agent import policy
+
+    for kind, sub in (("patch", "patches"), ("create", "skills")):
+        d = paths.DREAMS / sub / name
+        if not (d / "SKILL.md").exists():
+            continue
+        skill, problems = parse_skill(d / "SKILL.md")
+        if problems:
+            return False, f"draft {name!r} is not valid: {'; '.join(problems)}"
+        dest_dir = paths.SKILLS / skill.name
+        dest = dest_dir / "SKILL.md"
+        if kind == "create" and dest.exists():
+            return False, (f"skills/{skill.name}/SKILL.md already exists — "
+                           "hand-edit it instead, or remove it first")
+        if kind == "patch" and not dest.exists():
+            return False, (f"patch target skills/{skill.name}/SKILL.md is gone — "
+                           "`friday skills --scan` first")
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest.write_text((d / "SKILL.md").read_text(encoding="utf-8"),
+                        encoding="utf-8")
+        kept = ""
+        if (d / "PROPOSAL.json").exists():
+            (dest_dir / "PROPOSAL.json").write_text(
+                (d / "PROPOSAL.json").read_text(encoding="utf-8"),
+                encoding="utf-8")
+            kept = f"; proposal kept at skills/{skill.name}/PROPOSAL.json"
+        register_skills(conn)
+        shutil.rmtree(d)
+        policy.log(conn, actor="user", action="memory.skill_promoted",
+                   target=skill.name, decision="allowed",
+                   detail=f"{kind} promoted from dreams/{sub}/{name}{kept}")
+        return True, (f"promoted {skill.name} ({kind}) and registered it"
+                      + kept)
+    return False, f"no draft named {name!r} under dreams/"
+
+
+def discard_draft(conn: sqlite3.Connection | None, name: str) -> tuple[bool, str]:
+    """Throw a dream away. Also a user action, also audited — a declined
+    lesson is a decision worth a row, not litter."""
+    import shutil
+
+    for sub in ("skills", "patches"):
+        d = paths.DREAMS / sub / name
+        if d.exists():
+            shutil.rmtree(d)
+            if conn is not None:
+                from ..agent import policy
+                policy.log(conn, actor="user", action="dream.discarded",
+                           target=name, decision="allowed", detail=None)
+            return True, f"discarded draft {name!r}"
+    return False, f"no draft named {name!r} under dreams/"

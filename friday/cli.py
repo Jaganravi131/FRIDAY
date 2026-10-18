@@ -27,9 +27,12 @@ Subcommands:
                agent can measure without being able to tune against it (T-002)
     heartbeat  ⭐ one proactive tick. Silent (HEARTBEAT_OK) is success; a message
                is rare, deduped, and quiet hours + annoyance budget are enforced
-    skills     ⭐ S3 — list registered skills, validate SKILL.md files, show a body
+    skills     ⭐ S3 — list registered skills, validate SKILL.md files, show a body;
+               --promote/--discard gate the dreams/ drafts (the user's rung)
     review     ⭐ Dreaming seed 1 — re-read recent turns for unsaved durable facts;
                every write it makes is quote-checked against those same turns
+    dream      ⭐ Dreaming seeds 1+2 in one tick — the fact review, then the skill
+               distillation (drafts land under dreams/, promoted only by you)
     connectors ⭐ external accounts (gmail first) — status and config help, never
                prints a secret
     tune       ⭐ the personal fine-tuning pipeline — export instruction data from
@@ -726,11 +729,20 @@ def cmd_skills(args) -> int:
 
     paths.ensure_layout()
     conn = _conn(args)
+    if getattr(args, "promote", None):
+        ok, msg = skills_store.promote_draft(conn, args.promote)
+        _say(msg)
+        return 0 if ok else 1
+    if getattr(args, "discard", None):
+        ok, msg = skills_store.discard_draft(conn, args.discard)
+        _say(msg)
+        return 0 if ok else 1
     if getattr(args, "scan", False):
         rep = skills_store.register_skills(conn)
         _say(f"skills scan — {rep.summary()}")
         for s in rep.skipped:
             _say(f"  ✗ {s}")
+        _say_dreams()
         return 0
     if getattr(args, "show", None):
         row = conn.execute("SELECT * FROM skills WHERE name=?", (args.show,)).fetchone()
@@ -754,6 +766,79 @@ def cmd_skills(args) -> int:
     _say(f"{len(rows)} skill(s):")
     for r in rows:
         _say(f"  {r['name']:<24} {r['status']:<8} {r['uses']:>3}×  {r['when_to_use']}")
+    _say_dreams()
+    return 0
+
+
+def _say_dreams():
+    """The pending-drafts queue under dreams/ — surfaced on every `skills`
+    listing so a proposal cannot sit unnoticed (the user IS the gate)."""
+    from .memory.skills import list_drafts
+
+    drafts = list_drafts()
+    if not drafts:
+        return
+    _say(f"{len(drafts)} pending dream draft(s) — promote or discard, they ship nowhere until you do:")
+    for d in drafts:
+        why = f" — {d['rationale']}" if d["rationale"] else ""
+        _say(f"  [{'patch' if d['kind'] == 'patch' else 'create'}] {d['name']}{why}")
+        for q in d["quotes"][:2]:
+            _say(f"        quote: \"{q[:90]}\"")
+    _say("  → friday skills --promote NAME | --discard NAME")
+
+
+def cmd_dream(args) -> int:
+    """`friday dream` — one full self-improvement tick (doc 06, doc 21).
+
+    Seed 1 (facts): re-read recent turns, save what was missed — every write
+    quote-checked against those turns. Seed 2 (skills): distill the
+    class-level lesson — procedure, pitfalls, user corrections — into a DRAFT
+    under dreams/. The draft ships nowhere; `friday skills --promote` is the
+    gate, and it is yours. Hermes runs this in the background after a session;
+    FRIDAY runs it when you say so, because a 2.6B local model is the default
+    tier and dreaming is a model job (Q2).
+    """
+    import contextlib
+    import io as _io
+    import json as _json
+
+    from .llm.client import MockClient, get_client
+    from .memory import distill as distill_store
+    from .memory.review import run_review
+
+    paths.ensure_layout()
+    conn = _conn(args)
+    client: object = get_client()
+    if isinstance(client, MockClient):
+        _say("no model configured — set FRIDAY_MODEL or OPENAI_API_KEY "
+             "(dreaming needs a real reviewer)")
+        return 1
+    n = getattr(args, "last", 20)
+    with contextlib.redirect_stdout(_io.StringIO()):
+        st = run_review(conn, client=client, n=n)
+        rep = distill_store.propose_draft(conn, client=client, n=n)
+    wrote = 0 if st is None else sum(
+        1 for t in st.tool_log
+        if t.get("tool") == "memory_write" and not t.get("denied"))
+    denied = 0 if st is None else sum(
+        1 for t in st.tool_log
+        if t.get("tool") == "memory_write" and t.get("denied"))
+    if getattr(args, "json", False):
+        _say(_json.dumps({
+            "review": {"reviewed": st is not None, "wrote": wrote, "denied": denied},
+            "distill": None if rep is None else {
+                "action": rep.action, "name": rep.name,
+                "draft": rep.draft_path, "reasons": rep.reasons},
+        }))
+        return 0
+    _say(f"review: {wrote} saved, {denied} denied"
+         + ("" if st is not None else " (nothing to review)"))
+    if rep is None:
+        _say("distill: nothing to review")
+    else:
+        _say(f"distill: {rep.summary()}")
+        if rep.draft_path:
+            _say("  → friday skills --promote " + rep.name)
     return 0
 
 
@@ -946,6 +1031,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_skills); common(p)
     p.add_argument("--scan", action="store_true", help="re-register skills/*/SKILL.md + report problems")
     p.add_argument("--show", default=None, metavar="NAME", help="print one skill's full body")
+    p.add_argument("--promote", default=None, metavar="NAME",
+                   help="⭐ gate a dreams/ draft into skills/ (the user's rung)")
+    p.add_argument("--discard", default=None, metavar="NAME",
+                   help="throw a dreams/ draft away (audited)")
+
+    p = sub.add_parser("dream", help="⭐ one self-improvement tick — fact review + skill distillation")
+    p.set_defaults(fn=cmd_dream); common(p)
+    p.add_argument("--last", type=int, default=20, metavar="N", help="how many user turns to review")
+    p.add_argument("--json", action="store_true", help="machine-readable outcome")
 
     p = sub.add_parser("review", help="⭐ Dreaming seed 1 — quote-checked memory review of recent turns")
     p.set_defaults(fn=cmd_review); common(p)

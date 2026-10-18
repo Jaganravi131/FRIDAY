@@ -4,7 +4,7 @@ Read `AGENTS.md` first (lanes, gates, the loop). Every change names an item here
 Statuses: `open` · `in progress (lane, branch)` · `blocked (why)` · `done (numbers)` ·
 `partial (what remains)` · `QUESTION`.
 
-Last updated: 2026-10-18 (hermes-agent reconciliation: T-022 skills layer + T-023 review; third post-refresh restore), by the agent on branch `arena/ad9dff8f-friday`.
+Last updated: 2026-10-18 (hermes-agent reconciliation complete: T-022 skills, T-023 review, T-024 lesson layer), by the agent on branch `arena/ad9dff8f-friday`.
 
 ## Goal
 
@@ -425,6 +425,60 @@ sandbox refreshed a THIRD time before this work landed; the T-018…T-021 tree
 was reconstructed and recommitted (restore commit `8160f0e`), verified by
 reverting this session's edits and getting exactly 799/2 before proceeding.
 
+### T-024 · Hermes-agent reconciliation ③ — the lesson layer: distill → draft → promote  — `done`
+2026-10-18, same session: the user asked for the *self-improvement* tech
+specifically, with the whole project kept un-collapsed. The remaining half of
+Hermes's loop is the skill review (their `_SKILL_REVIEW_PROMPT`) — the pass
+that turns a session into a CLASS-LEVEL lesson. Analysis of their machinery
+(`skill_manage` read-before-write guard, write-origin ContextVar, `.usage.json`
+telemetry sidecar, background curator) is in doc 21 §2.1–2.2.
+
+Shipped:
+- `friday/memory/distill.py` + `friday dream` (one tick = seed 1 review + seed 2
+  distillation). The prompt carries Hermes's full writing discipline; the
+  reply is a JSON proposal, gated in the data layer: (1) **provenance** — every
+  `source_quote` through `policy.quote_is_user_authorised` against the reviewed
+  turns (fabricated lesson → `dream.skill_denied`, nothing written);
+  (2) **read-before-write by construction** — only the 3 most-used skill bodies
+  ride the prompt (6000-char budget) and only those are patchable; (3) **the
+  stable-prefix law** — drafts land under `dreams/{skills,patches}/<name>/` with
+  a PROPOSAL.json (quotes + rationale + session), and ship NOWHERE: no table
+  row, no FTS, ledger byte-identical.
+- `friday skills --promote NAME` / `--discard NAME` — the user's rung (doc 06
+  ladder). Promote re-validates with the same parser registration uses, moves
+  the draft into `skills/`, keeps the PROPOSAL.json beside it as the durable
+  why, re-registers (uses preserved on patches), audits `memory.skill_promoted`
+  with actor **user**. Discard audits too — a declined lesson is a decision,
+  not litter. Pending drafts surface on every `friday skills` listing.
+- `record_activations()` — a skill body that ships in a turn bumps
+  `uses`/`last_used` (best-effort; ACTIVE only). The index ordering and the
+  eventual G-gate pruning now have real signal instead of a zero column.
+- `parse_skill` refactored to a pure `parse_skill_text` — drafts must declare
+  their own frontmatter name (no directory-name inheritance), which is what
+  lets the dream validate a proposal it never wrote to disk.
+- `memory_write`'s tool doc carries the routing discipline from Hermes's
+  memory tool: facts ONLY; procedures/pitfalls/corrections about a class of
+  task belong in a skill — `friday dream` distills those.
+
+Accepted edge (same class as T-023's): gate 1 checks quotes against the
+reviewed turns, and the instruction text is user-role content — a "quote"
+lifted from the prompt itself would pass. Realistic forgery (invented user
+preferences) is blocked; the prompt is FRIDAY's own text.
+
+Not adopted (doc 21 §2.2): background curator (premature — the library is
+user-gated; doc 06 G-gates are the blueprint's own lifecycle), skill hub
+install (supply-chain, same law as T-017's self-update rejection). Scheduling
+dreams (their trigger is session-end) stays Q2-gated: dreaming is a model job
+and the default tier is a 2.6B local model.
+
+Acceptance: 21 new tests in `tests/test_distill.py` pin all three gates, the
+promotion flow (create + patch, uses preserved), telemetry (incl. loop
+integration: a shipped body → uses=1), and the ships-nowhere invariant.
+Suite **839 passed / 2 xfailed**; bench at ratchet (recall@1 0.963, MRR 0.963,
+provenance 1.0); wheel probe PASS; CLI smoke (seed → scan → draft → promote →
+discard) with audit rows verified. New files ruff-clean; repo's 271
+pre-existing lint findings untouched.
+
 ## Questions for the user
 
 * **Q1 · Which embedder should the "top-level" bar be measured against?** The default
@@ -442,3 +496,9 @@ reverting this session's edits and getting exactly 799/2 before proceeding.
 * **Q4 · Who writes the blind holdout (T-002)?** It must not be the agent that changes the
   retrieval code. If another agent is available, point it at T-002. If not, the user can
   write 40 paraphrases in an afternoon.
+* **Q5 · When should FRIDAY dream? (T-024 follow-up)** Hermes runs its review in the
+  background when a session ends. FRIDAY's `friday dream` is a manual command, because
+  dreaming is a model job and the default tier is a 2.6B local model (Q2). Options once a
+  real model exists: (a) keep it manual, (b) auto-run at `friday chat` exit, (c) tie it to
+  the heartbeat's idle detection (doc 08). Each has a cost/annoyance profile the user
+  should pick.
