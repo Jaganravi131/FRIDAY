@@ -28,6 +28,8 @@ Subcommands:
     heartbeat  ⭐ one proactive tick. Silent (HEARTBEAT_OK) is success; a message
                is rare, deduped, and quiet hours + annoyance budget are enforced
     skills     ⭐ S3 — list registered skills, validate SKILL.md files, show a body
+    review     ⭐ Dreaming seed 1 — re-read recent turns for unsaved durable facts;
+               every write it makes is quote-checked against those same turns
     connectors ⭐ external accounts (gmail first) — status and config help, never
                prints a secret
     tune       ⭐ the personal fine-tuning pipeline — export instruction data from
@@ -755,6 +757,72 @@ def cmd_skills(args) -> int:
     return 0
 
 
+def cmd_review(args) -> int:
+    """`friday review` — Dreaming seed 1 (doc 09).
+
+    Re-reads the last N user turns hunting for durable facts the live loop
+    missed (narratives, mid-sentence facts, things the turn's task was NOT
+    about). The review agent runs in scope='dreaming' on the SAME session —
+    the replayed turns are its authority, which is the whole point: a write
+    whose quote is not in those turns is DENIED by the policy engine, not
+    merely discouraged by prompt text. Hermes's review is honest because it
+    asks nicely; FRIDAY's is honest because it cannot forge provenance.
+    """
+    import contextlib
+    import io as _io
+    import json as _json
+    import sqlite3 as _sq
+
+    from .llm.client import MockClient, get_client
+    from .memory.review import run_review
+
+    paths.ensure_layout()
+    conn = _conn(args)
+    client: object = get_client()
+    if isinstance(client, MockClient):
+        _say("no model configured — set FRIDAY_MODEL or OPENAI_API_KEY "
+             "(dreaming needs a real reviewer)")
+        return 1
+    with contextlib.redirect_stdout(_io.StringIO()):
+        try:
+            st = run_review(conn, client=client, n=getattr(args, "last", 20))
+        except _sq.Error as exc:
+            st = None
+            _err = str(exc)
+        else:
+            _err = None
+    if getattr(args, "json", False):
+        payload = {
+            "reviewed": bool(st is not None),
+            "scope": st.scope if st else None,
+            "error": _err,
+            "wrote": 0 if st is None else sum(
+                1 for t in st.tool_log
+                if t.get("tool") == "memory_write" and not t.get("denied")),
+            "denied": 0 if st is None else sum(
+                1 for t in st.tool_log
+                if t.get("tool") == "memory_write" and t.get("denied")),
+        }
+        _say(_json.dumps(payload))
+        return 0
+    if st is None:
+        _say(f"review: nothing to review{_err and ' — ' + _err or ''}")
+        return 0
+    wrote = [t for t in st.tool_log if t.get("tool") == "memory_write"]
+    denied = [t for t in wrote if t.get("denied")]
+    if not wrote:
+        _say("review: clean — nothing worth saving")
+        return 0
+    for t in wrote:
+        mark = "denied (quote not found in reviewed turns)" if t.get("denied") \
+            else f"saved {t.get('args', {}).get('predicate')}"
+        _say(f"  {'✗' if t.get('denied') else '✓'} {mark}")
+    if denied:
+        _say(f"review: {len(denied)} write(s) denied — the review may only save "
+             "what the user actually said")
+    return 0
+
+
 def cmd_serve(args) -> int:
     """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
 
@@ -878,6 +946,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_skills); common(p)
     p.add_argument("--scan", action="store_true", help="re-register skills/*/SKILL.md + report problems")
     p.add_argument("--show", default=None, metavar="NAME", help="print one skill's full body")
+
+    p = sub.add_parser("review", help="⭐ Dreaming seed 1 — quote-checked memory review of recent turns")
+    p.set_defaults(fn=cmd_review); common(p)
+    p.add_argument("--last", type=int, default=20, metavar="N", help="how many user turns to review")
+    p.add_argument("--json", action="store_true", help="machine-readable outcome")
 
     p = sub.add_parser("holdout", help="⭐ run a BLIND retrieval holdout — aggregates only (T-002)")
     p.set_defaults(fn=cmd_holdout); common(p)

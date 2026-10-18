@@ -36,7 +36,6 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 from .. import paths
 from ..store import db
@@ -131,8 +130,8 @@ def parse_skill(path: Path) -> tuple[Skill, list[str]]:
     skill = Skill(name=path.parent.name, path=str(path.relative_to(paths.ROOT)))
     m = _FRONTMATTER.match(text)
     if not m:
-        return skill, ["no --- frontmatter block (agentskills.io format: name, "
-                       "description, version, when_to_use)"]
+        return skill, [("no --- frontmatter block (agentskills.io format: "
+                        "name, description, version, when_to_use)")]
     fm = m.group("fm")
     skill.description = _parse_scalar(fm, "description")
     skill.when_to_use = _parse_scalar(fm, "when_to_use")

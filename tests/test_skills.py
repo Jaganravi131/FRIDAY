@@ -18,9 +18,10 @@ What is being pinned:
 """
 from __future__ import annotations
 
+from friday.agent.loop import Agent
+from friday.llm.client import MockClient, Response, ToolCall
 from friday.memory.skills import parse_skill, register_skills, skills_index
 from friday.memory.watcher import MemoryWatcher
-
 
 SKILL_MD = """---
 name: chennai-lease
@@ -105,6 +106,7 @@ def test_register_fills_the_table_and_fts_and_drops_stale(root):
         _mk(root)
         # a legacy compile_markdown_dir row + the seeded README must not survive
         import json
+
         from friday.store.db import fts_upsert
         fts_upsert(conn, "skill:skills/chennai-lease/SKILL.md", "skill", "stale")
         rep = register_skills(conn)
@@ -299,5 +301,105 @@ def test_a_hand_edited_skill_re_registers_on_the_next_sync(root):
         assert rep.skills_changed, rep.summary()
         assert conn.execute(
             "SELECT COUNT(*) AS n FROM skills").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+# ── Dreaming seed 1: the review ────────────────────────────────────────────────
+
+
+class _ReviewClient:
+    """Says exactly one memory_write, with the quote the test chooses."""
+
+    name = "review-scripted"
+
+    def __init__(self, quote):
+        self.quote = quote
+
+    def chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768):
+        return Response(text="", tool_calls=[ToolCall("memory_write", {
+            "predicate": "lease_amount_monthly", "object": "25000 INR",
+            "source_kind": "stated", "source_quote": self.quote,
+        })], model=self.name)
+
+
+def _seed_conversation(conn, turns):
+    ag = Agent(conn, client=MockClient())
+    sid = ag.run(turns[0]).session_id
+    for t in turns[1:]:
+        ag.run(t, session_id=sid)
+    return sid
+
+
+def test_the_review_prompt_carries_the_real_turns(root):
+    from friday.memory.review import review_prompt, review_turns
+    from friday.store import db
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        _seed_conversation(conn, ["my rent is 25000 INR", "thanks"])
+        prompt = review_prompt(conn, n=5)
+        assert "my rent is 25000 INR" in prompt
+        assert "Nothing to save" in prompt
+        rt = review_turns(conn, n=1)
+        assert rt.turns == ["thanks"]     # newest last, bounded
+    finally:
+        conn.close()
+
+
+def test_an_honest_review_write_passes(root):
+    """A review that quotes what the user actually said is accepted — the loop
+    is allowed to learn."""
+    from friday.memory.review import run_review
+    from friday.store import db
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        _seed_conversation(conn, ["my rent is 25000 INR"])
+        st = run_review(conn, client=_ReviewClient("rent is 25000 INR"))
+        assert st is not None and st.scope == "dreaming"
+        w = [t for t in st.tool_log if t.get("tool") == "memory_write"]
+        assert w and not w[0].get("denied"), st.tool_log
+        # one ACTIVE fact for the predicate (turn 1's write, possibly superseded
+        # by the review's own honest re-write — never zero, never retracted-away)
+        assert conn.execute(
+            "SELECT COUNT(*) AS n FROM facts WHERE predicate='lease_amount_monthly'"
+            " AND retracted_at IS NULL").fetchone()["n"] >= 1
+    finally:
+        conn.close()
+
+
+def test_a_fabricated_review_write_is_denied_by_the_data_layer(root):
+    """⭐ The Hermes replication's whole point. Their review is honest because
+    the prompt asks nicely; FRIDAY's is honest because the policy engine denies
+    a dreaming-scope write whose quote is not in the reviewed turns. A review
+    that invents 'the user told me X' writes nothing."""
+    from friday.memory.review import run_review
+    from friday.store import db
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        _seed_conversation(conn, ["my rent is 25000 INR"])
+        before = conn.execute(
+            "SELECT COUNT(*) AS n FROM facts WHERE retracted_at IS NULL"
+        ).fetchone()["n"]
+        st = run_review(conn, client=_ReviewClient("I work at Acme Systems"))
+        w = [t for t in st.tool_log if t.get("tool") == "memory_write"]
+        assert w and w[0].get("denied")
+        after = conn.execute(
+            "SELECT COUNT(*) AS n FROM facts WHERE retracted_at IS NULL"
+        ).fetchone()["n"]
+        assert after == before, "a denied review must write nothing"
+    finally:
+        conn.close()
+
+
+def test_review_with_no_conversation_is_a_clean_noop(root):
+    from friday.memory.review import run_review
+    from friday.store import db
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        assert run_review(conn) is None
     finally:
         conn.close()
