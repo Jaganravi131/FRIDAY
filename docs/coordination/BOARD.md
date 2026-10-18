@@ -4,7 +4,7 @@ Read `AGENTS.md` first (lanes, gates, the loop). Every change names an item here
 Statuses: `open` · `in progress (lane, branch)` · `blocked (why)` · `done (numbers)` ·
 `partial (what remains)` · `QUESTION`.
 
-Last updated: 2026-10-18 (review round 2: T-018…T-021; post-refresh restore), by the agent on branch `arena/ad9dff8f-friday`.
+Last updated: 2026-10-18 (hermes-agent reconciliation: T-022 skills layer + T-023 review; third post-refresh restore), by the agent on branch `arena/ad9dff8f-friday`.
 
 ## Goal
 
@@ -371,6 +371,59 @@ passed / 2 xfailed after.
 history reset to the initial commit while the working tree persisted; the
 T-001…T-017 tree is recommitted (restore commit below/above), and this
 session's fixes land as per-ID commits on top.
+
+### T-022 · Hermes-agent reconciliation ① — S3 skills layer  — `done`
+2026-10-18: the user pointed at `nousresearch/hermes-agent` — "analyse this
+repo, and if the architecture or the code is useful, replicate it." Full
+findings + rejection table (with the law each rejection breaks): **doc 21**.
+The useful core was two designs FRIDAY's blueprint already had — this entry
+and T-023 are them, as-built.
+
+Shipped: `friday/memory/skills.py` (agentskills.io SKILL.md parse/validate →
+`skills` table + one FTS row per skill, ref `skill:<name>`; idempotent
+re-register preserving `uses`/`last_used`; drops stale rows AND the legacy
+`skill:skills/...` refs the old Markdown pass created, including the seeded
+README that had indexed as a 'skill'); a new **STABLE ledger slot** `skills`
+(192 tok, after senses — session-stable like the soul; hand-edits re-register
+on the next compile via the watcher's baseline rule, audited
+`memory.skills_edit`); `friday skills / --scan / --show NAME`.
+
+Two load-bearing details: **when_to_use is the whole routing surface**, so
+validation rejects a skill without one (a skill that can't say when it applies
+can never be routed to — reported, never half-registered); and **the index is
+an injection surface** — a HOSTILE-scored when_to_use is withheld from the
+slot (the core_memory boundary, now also pinned by `skills` joining
+PROTECTED_TAGS, which the test_security invariant forced). Empty skill set =
+empty slot = **byte-identical prompt** (bench re-run at ratchet: recall@1
+0.963, MRR 0.963, provenance 1.0).
+
+### T-023 · Hermes-agent reconciliation ② — Dreaming seed 1, the review  — `done`
+The idea Hermes's README is actually about: an agent that only writes memory
+mid-task misses everything the task was *not* about. Their background review
+re-reads the transcript and saves what was missed; their honesty is prompt
+text. FRIDAY adopted the loop, not the trust model.
+
+Shipped: `friday/memory/review.py` + `friday review [--last N] [--json]`.
+`run_review()` runs `Agent.run` in **scope='dreaming' on the same session** —
+the replayed turns are the review's authority, so a `memory_write` whose
+`source_quote` is not in those turns is **denied by the policy engine** (the
+T-004/T-019 gate, now doing review honesty). Unattended scope means ambiguous
+resolves to deny, never confirm. Hermes prompt fragments (MIT) adapted with
+attribution, including the do-not-capture list: env-dependent failures,
+negative tool claims, transient errors, one-off narratives, unresolved
+failures dressed as workflow.
+
+Known accepted edge (documented in doc 21 and the module): the review prompt
+itself is user-role content, so a quote drawn from the *instruction text*
+would pass the gate. Realistic forgery — invented facts attributed to the
+user — is blocked; the prompt text is FRIDAY's own and only the reviewer sees
+it.
+
+Suite after both: **818 passed / 2 xfailed**; wheel probe PASS (skills+review
+import from the installed wheel, subcommands registered). Process note: the
+sandbox refreshed a THIRD time before this work landed; the T-018…T-021 tree
+was reconstructed and recommitted (restore commit `8160f0e`), verified by
+reverting this session's edits and getting exactly 799/2 before proceeding.
 
 ## Questions for the user
 

@@ -175,6 +175,11 @@ CREATE TABLE skills (
   last_used    TEXT,
   provenance   TEXT             -- JSON: distilled_from traces
 );
+  -- T-022 (2026-10-18): live. Filled by friday/memory/skills.py from
+  -- skills/<name>/SKILL.md (agentskills.io frontmatter, adopted from
+  -- hermes-agent — see doc 21). when_to_use is the whole routing surface:
+  -- a hostile one is withheld from the index (injection boundary, doc 09).
+  -- Re-register preserves uses/last_used; empty set = empty ledger slot.
 
 -- ─── Sense Registry & audit (see 09) ──────────────────────────────────────────
 CREATE TABLE senses (
@@ -243,7 +248,7 @@ Hard character/token budgets. These are **constraints, not suggestions** — the
 | **Rules** | `AGENTS.md` | ~300 tok | Durable operating rules ONLY. Every line is a recurring tax. |
 | **User** | `USER.md` | **1,400 chars** (~250 tok) | Hermes's exact budget. Forces high signal. |
 | **Core memory** | `MEMORY.md` | **2,200 chars** (~400 tok) | Hermes's exact budget. The 20 facts that matter most. |
-| **Skill index** | `skills-index.md` | ~30 tok × N skills | name + when_to_use only. Bodies load on activation. |
+| **Skill index** | `skills-index.md` (as built: the `skills` ledger slot, T-022) | 192 tok total | name + when_to_use only, uses DESC. Bodies load on activation. |
 | **Active senses** | Sense Registry | ~180 tok | What FRIDAY can currently see, and what it can't. |
 | | | **≈ 1,750 tok fixed** | |
 | **JIT: recalled memory** | retrieval path | 600–1,200 tok | top-3 reranked facts |

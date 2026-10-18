@@ -338,6 +338,17 @@ escapes them.
 
 ## 4. The four self-improvement loops (in the order you build them)
 
+> **As built 2026-10-18 — the manual rung of this ladder exists.** `friday review`
+> (T-023, from the hermes-agent reconciliation — doc 21) re-reads the last N
+> user turns in `dreaming` scope for durable facts the live loop missed, with
+> Hermes's refusal list (env-dependent failures, transient errors, one-off
+> narratives, unresolved failures dressed as workflow). The difference from the
+> design above: review honesty is NOT prompt text. The reviewer runs on the
+> same session, so every write it makes is quote-checked by the policy engine
+> against the turns being reviewed — a fabricated "the user told me" is denied
+> in the data layer. This is the human-supervised rung; the gate machinery in
+> §2 still guards everything automatic.
+
 ### Loop 1 — Prompt evolution (GEPA). *Week 11. Safest, biggest ROI.*
 
 **Weights never change. Prompts are human-readable, auditable, fully reversible.**
