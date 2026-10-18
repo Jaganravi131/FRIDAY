@@ -32,9 +32,11 @@ def test_slot_order_is_fixed_and_identity_is_first():
     """Declaration order == emission order == cache friendliness."""
     assert isinstance(SLOT_ORDER, tuple)
     assert SLOT_ORDER[0] == "identity", "the cached prefix must be emitted first"
-    assert len(SLOT_ORDER) == 8
-    # the two stable slots are the first two, contiguous, before any JIT slot
-    assert STABLE_SLOTS == {"identity", "senses"}
+    assert len(SLOT_ORDER) == 9
+    # the three stable slots come first, contiguous, before any JIT slot
+    # (skills joined identity+senses in T-022: the one-line skills index is
+    # session-stable, like the soul, so it rides the cached prefix)
+    assert STABLE_SLOTS == {"identity", "senses", "skills"}
     jit = [n for n in SLOT_ORDER if n not in STABLE_SLOTS]
     assert SLOT_ORDER.index("identity") < min(SLOT_ORDER.index(n) for n in jit)
     assert set(LEDGER_SLOTS) == set(SLOT_ORDER), \

@@ -160,6 +160,15 @@ class Ledger:
             return "senses: none enabled (FRIDAY can only use what you type or paste)"
         return "senses enabled: " + ", ".join(sorted(senses))
 
+    def skills_text(self, conn: sqlite3.Connection | None) -> str:
+        """S3: the always-on one-line index of ACTIVE skills. The body of a skill
+        reaches the model only through retrieval — progressive disclosure, because
+        tool and skill definitions are a fixed per-turn tax an 8K budget cannot
+        afford (docs/architecture/03 §skills)."""
+        from ..memory import skills as skills_store
+
+        return skills_store.skills_index(conn)
+
     # ── compile ────────────────────────────────────────────────────────────────
 
     def compile(self, g: Gather, *, conn: sqlite3.Connection | None = None) -> CompiledContext:
@@ -168,6 +177,12 @@ class Ledger:
         # STABLE PREFIX — must be byte-identical across turns or every turn re-prefills.
         _fill(slots["identity"], self.identity_text())
         _fill(slots["senses"], self.senses_text(g.senses))
+        # S3: the one-line index of ACTIVE skills. Stable for the same reason the
+        # soul is: it changes between sessions (hand-edits re-register on the next
+        # compile), not between turns, so it belongs in the cached prefix where
+        # the model can rely on it. Empty when no skills are registered — an
+        # empty slot renders nothing, keeping a skill-less install byte-identical.
+        _fill(slots["skills"], self.skills_text(conn))
 
         # JIT ZONE — changes every turn, always after the stable prefix.
         _fill(slots["user"], _read(self.soul / "USER.md"))

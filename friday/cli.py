@@ -27,6 +27,7 @@ Subcommands:
                agent can measure without being able to tune against it (T-002)
     heartbeat  ⭐ one proactive tick. Silent (HEARTBEAT_OK) is success; a message
                is rare, deduped, and quiet hours + annoyance budget are enforced
+    skills     ⭐ S3 — list registered skills, validate SKILL.md files, show a body
     connectors ⭐ external accounts (gmail first) — status and config help, never
                prints a secret
     tune       ⭐ the personal fine-tuning pipeline — export instruction data from
@@ -710,6 +711,50 @@ def cmd_heartbeat(args) -> int:
     return 0
 
 
+def cmd_skills(args) -> int:
+    """`friday skills` — the S3 layer: list, validate, show.
+
+    Default lists registered skills (name, status, uses, when_to_use — the same
+    line the ledger's stable slot ships). `--scan` re-registers from
+    skills/*/SKILL.md and reports format problems instead of silently skipping
+    them. `--show NAME` prints the full body: what retrieval would deliver on
+    activation.
+    """
+    from .memory import skills as skills_store
+
+    paths.ensure_layout()
+    conn = _conn(args)
+    if getattr(args, "scan", False):
+        rep = skills_store.register_skills(conn)
+        _say(f"skills scan — {rep.summary()}")
+        for s in rep.skipped:
+            _say(f"  ✗ {s}")
+        return 0
+    if getattr(args, "show", None):
+        row = conn.execute("SELECT * FROM skills WHERE name=?", (args.show,)).fetchone()
+        if row is None:
+            _say(f"no skill named {args.show!r} — `friday skills --scan` first")
+            return 1
+        _say(f"# {row['name']} (v{row['version']}, {row['status']}, {row['uses']} uses)")
+        _say(f"when_to_use: {row['when_to_use']}")
+        p = paths.ROOT / row["path"]
+        if p.exists():
+            _say("")
+            _say(p.read_text(encoding="utf-8").strip())
+        return 0
+    rows = conn.execute(
+        "SELECT name, status, uses, when_to_use FROM skills ORDER BY uses DESC, name"
+    ).fetchall()
+    if not rows:
+        _say("no skills registered — add skills/<name>/SKILL.md (agentskills.io "
+             "format), then `friday skills --scan`")
+        return 0
+    _say(f"{len(rows)} skill(s):")
+    for r in rows:
+        _say(f"  {r['name']:<24} {r['status']:<8} {r['uses']:>3}×  {r['when_to_use']}")
+    return 0
+
+
 def cmd_serve(args) -> int:
     """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
 
@@ -828,6 +873,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("heartbeat", help="⭐ one proactive tick — silent is success (doc 08)")
     p.set_defaults(fn=cmd_heartbeat); common(p)
     p.add_argument("--json", action="store_true", help="machine-readable tick-ack")
+
+    p = sub.add_parser("skills", help="⭐ S3 — list/validate skills; --scan re-registers")
+    p.set_defaults(fn=cmd_skills); common(p)
+    p.add_argument("--scan", action="store_true", help="re-register skills/*/SKILL.md + report problems")
+    p.add_argument("--show", default=None, metavar="NAME", help="print one skill's full body")
 
     p = sub.add_parser("holdout", help="⭐ run a BLIND retrieval holdout — aggregates only (T-002)")
     p.set_defaults(fn=cmd_holdout); common(p)

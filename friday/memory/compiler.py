@@ -445,7 +445,13 @@ def compile_all(
 
         st.episodes = compile_markdown_dir(paths.EPISODES, conn, "episode", embedder=embedder)
         st.daily = compile_markdown_dir(paths.DAILY, conn, "daily", embedder=embedder)
-        st.skills = compile_markdown_dir(paths.SKILLS, conn, "skill", embedder=embedder)
+        # ⭐ S3 skills get a dedicated registrar, not the narrative-Markdown pass:
+        # it validates the agentskills.io format, fills the `skills` table (the
+        # index + status pipeline), and indexes the routing surface + body under
+        # one ref per skill. The old pass indexed every .md under skills/ — the
+        # seeded README included — as an undifferentiated 'skill' row.
+        from . import skills as skills_store
+        st.skills = skills_store.register_skills(conn, embedder=embedder).registered
         st.traces = compile_traces(conn)
 
         st.fts_rows = conn.execute("SELECT COUNT(*) AS n FROM memory_fts").fetchone()["n"]

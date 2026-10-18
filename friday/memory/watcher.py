@@ -59,6 +59,7 @@ class SyncReport:
     recompiled: list[str] = field(default_factory=list)   # fact files re-derived
     deleted: list[str] = field(default_factory=list)      # files removed from disk
     soul_changed: list[str] = field(default_factory=list)  # identity files (read live)
+    skills_changed: list[str] = field(default_factory=list)  # S3 skills re-registered
     facts_written: int = 0
     errors: list[str] = field(default_factory=list)
     checked: int = 0                                       # files stat'd
@@ -66,7 +67,8 @@ class SyncReport:
 
     @property
     def changed(self) -> bool:
-        return bool(self.recompiled or self.deleted or self.soul_changed)
+        return bool(self.recompiled or self.deleted or self.soul_changed
+                    or self.skills_changed)
 
     def summary(self) -> str:
         if not self.changed:
@@ -80,6 +82,8 @@ class SyncReport:
                         f"{', '.join(Path(p).name for p in self.deleted)}")
         if self.soul_changed:
             bits.append(f"soul edited: {', '.join(Path(p).name for p in self.soul_changed)}")
+        if self.skills_changed:
+            bits.append(f"skills edited: {len(self.skills_changed)} re-registered")
         if self.facts_written:
             bits.append(f"{self.facts_written} facts re-derived")
         return "; ".join(bits)
@@ -202,6 +206,7 @@ class MemoryWatcher:
         self.log_audit = log_audit
         self._mtime: dict[str, tuple[float, int]] = {}
         self._soul_mtime: dict[str, tuple[float, int]] = {}
+        self._skills_mtime: dict[str, tuple[float, int]] = {}
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
         #: False until the first sync has populated the soul mtime cache. Without this,
@@ -209,6 +214,10 @@ class MemoryWatcher:
         #: runs one process per `friday ask`, so the notice appeared on every single
         #: turn and became noise that would have hidden a real edit.
         self._soul_baselined = False
+        #: Same first-pass rule for skills/ as for soul/: without a baseline, a
+        #: fresh process would "notice" skills nobody touched and re-register on
+        #: the first turn of every `friday ask`.
+        self._skills_baselined = False
 
     # ── change detection ──────────────────────────────────────────────────────
 
@@ -238,6 +247,14 @@ class MemoryWatcher:
 
     def soul_candidates(self) -> list[Path]:
         return [p for p in _soul_files() if self._moved(self._soul_mtime, p)]
+
+    def skills_candidates(self) -> list[Path]:
+        """SKILL.md files whose (mtime, size) moved. Like soul/, skills are not
+        fact files: a change means re-REGISTER (table + FTS rows), not re-derive."""
+        if not paths.SKILLS.exists():
+            return []
+        return [p for p in sorted(paths.SKILLS.glob("*/SKILL.md"))
+                if self._moved(self._skills_mtime, p)]
 
     # ── the sync pass ─────────────────────────────────────────────────────────
 
@@ -296,6 +313,22 @@ class MemoryWatcher:
             rep.soul_changed.append(str(p))
             self._audit(conn, p, "identity file edited (stable prefix will re-cache)",
                         action="memory.soul_edit")
+
+        moved_skills = self.skills_candidates()
+        if not self._skills_baselined:
+            self._skills_baselined = True
+            moved_skills = []
+        if moved_skills:
+            # One re-register covers every edit (add/remove/modify); the registrar
+            # drops stale rows itself. Like a soul edit this invalidates the cached
+            # prefix — the skills index is a stable slot — which is why it is
+            # reported, not silently absorbed.
+            from . import skills as skills_store
+            srep = skills_store.register_skills(conn, embedder=embedder)
+            rep.skills_changed = [str(p) for p in moved_skills]
+            self._audit(conn, moved_skills[0],
+                        f"skills re-registered: {srep.summary()}",
+                        action="memory.skills_edit")
 
         if rep.recompiled or rep.deleted:
             conn.commit()

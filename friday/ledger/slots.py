@@ -30,6 +30,7 @@ from typing import Any
 SLOT_ORDER: tuple[str, ...] = (
     "identity",   # stable
     "senses",     # stable
+    "skills",     # stable — the one-line index of ACTIVE skills (doc 03 §S3)
     "user",       # jit
     "core_mem",   # jit
     "recalled",   # jit
@@ -38,7 +39,7 @@ SLOT_ORDER: tuple[str, ...] = (
     "scratch",    # jit
 )
 
-STABLE_SLOTS = frozenset({"identity", "senses"})
+STABLE_SLOTS = frozenset({"identity", "senses", "skills"})
 
 
 @dataclass

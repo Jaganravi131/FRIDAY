@@ -153,6 +153,12 @@ LEDGER_SLOTS: dict[str, int] = {
     "user": 512,          # USER.md (hard budget 1,400 chars ~ 350 tokens)
     "core_mem": 640,      # MEMORY.md — the ~20 facts that matter most
     "senses": 256,        # which senses are enabled right now
+    # ⭐ S3 skills index (doc 03: ~30 tok/skill). Stable: skills do not change
+    # mid-session (hand-edits land on the next compile, same rule as soul/).
+    # 192 = ~6 skills visible; the rest are reachable by retrieval — progressive
+    # disclosure is the point, and an empty skill set renders an empty slot, so
+    # a skill-less install compiles the byte-identical prompt it always did.
+    "skills": 192,
     "recalled": 1200,     # JIT retrieval results (Law 3)
     "docs": 3000,         # offloaded tool output, pulled by pointer
     "transcript": 2560,   # recent turns; with an RSC this becomes a fixed state

@@ -98,7 +98,7 @@ def trust_of(source_kind: str | None, *, default: Trust = Trust.IMPORTED) -> Tru
 #: treat `<system>` and `<instructions>` as privileged regardless of where they sit.
 PROTECTED_TAGS = frozenset({
     # the Ledger's own slots — see friday/ledger/slots.py SLOT_ORDER
-    "identity", "senses", "user", "core_memory", "core_mem", "recalled",
+    "identity", "senses", "skills", "user", "core_memory", "core_mem", "recalled",
     "retrieved_memory", "docs", "retrieved_docs", "transcript", "scratch",
     "scratchpad", "state", "state_block",
     # role and authority spoofing
