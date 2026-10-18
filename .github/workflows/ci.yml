@@ -1,0 +1,135 @@
+name: CI
+
+# Every push and every pull request. This exists because other people will work on
+# this repository, and the invariants below are the kind that break silently: nothing
+# stops at runtime when the stable prefix starts varying per turn, when a redactor
+# misses a pattern, or when a fact file becomes permanently stale. The test suite is
+# the only thing that notices, so it has to run on someone else's change too.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is not a courtesy target — it is the primary deployment platform.
+        # Path handling, mtime granularity, file locking and symlink availability all
+        # differ there, and the watcher hashes files whose mtimes behave differently
+        # on NTFS than on ext4.
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Deliberately NO numpy, NO torch, NO sqlite-vec. The core is stdlib + sqlite3
+      # and must stay that way: the target machine is a 16 GB laptop with no CUDA, and
+      # a dependency that quietly becomes required is how a local-first project turns
+      # into a cloud project. Installing them here would let that regression pass CI.
+      - name: Install test-only dependencies
+        run: python -m pip install --upgrade pip pytest pytest-subtests
+
+      - name: Core imports with nothing but the standard library
+        run: python -c "import friday, friday.cli, friday.agent.loop, friday.ledger.compiler, friday.memory.compiler, friday.retrieval.pipeline, friday.security, friday.research.deltagate; print('stdlib-only core OK')"
+
+      - name: Build and test the installed distribution
+        # Building the wheel FROM the sdist also catches missing source-manifest files.
+        # The probe uses a fresh stdlib-only venv outside the checkout, never -e .
+        run: |
+          python -m pip install build
+          python -m build
+          python scripts/check_wheel.py dist
+
+      - name: Test suite
+        # Run through scripts/ci_pytest.py rather than invoking pytest directly. Same
+        # tests, same exit code — but failures are also emitted as `::error::` workflow
+        # commands, which the runner stores as check-run ANNOTATIONS. Annotations are
+        # served by api.github.com; job logs are served by
+        # results-receiver.actions.githubusercontent.com and artifacts by
+        # pipelines.actions.githubusercontent.com. From a network that can only reach the
+        # API, a red Windows job is otherwise completely undiagnosable: `gh run view
+        # --log` returns a TLS EOF and the only visible fact is that it failed.
+        #
+        #   gh api repos/{owner}/{repo}/check-runs/{job_id}/annotations
+        #
+        # It also makes the platform legible, which is the whole point of the matrix:
+        # Windows is the primary deployment target, so a failure that can only be read
+        # on Linux is a failure that cannot be acted on.
+        run: python scripts/ci_pytest.py
+
+      - name: Phase 0 exit gate
+        # Condition 11 is the only SKIP here (it needs a real model and an hour of wall
+        # clock). Condition 12 passes its server half automatically; its phone half is
+        # manual. The other eleven must PASS, and the script exits nonzero on any FAIL.
+        # (Condition 2 used to be listed as a skip here. It is automated and passes.) PYTHONUTF8 matters on Windows: the report prints
+        # ✅/❌/✋, and without UTF-8 mode stdout is cp1252 and the first status line
+        # raises UnicodeEncodeError — a red step with no test failure in it. FAILs are
+        # also emitted as annotations by the script itself, so they stay readable from
+        # networks that can only reach the API.
+        env:
+          PYTHONUTF8: "1"
+        run: python scripts/phase0_exit_test.py
+
+  hygiene:
+    name: repository hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Every Python file parses
+        run: |
+          python - <<'PY'
+          import ast, pathlib, sys
+          bad = []
+          for p in sorted(pathlib.Path(".").rglob("*.py")):
+              if any(x in p.parts for x in (".git", "__pycache__", "build", "dist")):
+                  continue
+              try:
+                  ast.parse(p.read_text(encoding="utf-8"))
+              except SyntaxError as e:
+                  bad.append(f"{p}: {e}")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print("all files parse")
+          PY
+
+      - name: No user data is committed
+        # Markdown is truth, but the USER's markdown is not the repository's. soul/,
+        # memory/ and artifacts/ are data; committing them would publish someone's
+        # memory — and, before redaction existed, their credentials.
+        run: |
+          if git ls-files | grep -qE '^(memory|soul|artifacts)/'; then
+            echo "user data is tracked by git:"; git ls-files | grep -E '^(memory|soul|artifacts)/'; exit 1
+          fi
+          echo "no user data tracked"
+
+      - name: Retrieval regression gate (Law 10)
+        # A merely *worse* answer raises no exception, so nothing else in this workflow
+        # would notice retrieval rotting. Model-free and ~0.1s: it scores a fixed
+        # synthetic corpus, so it needs no server and no secrets, and it compares against
+        # the baseline recorded in BENCHMARKS.md.
+        run: python -m friday bench --gate
+
+      - name: No stray build artifacts in the working tree
+        run: |
+          test -z "$(git status --porcelain)" || { git status --short; exit 1; }

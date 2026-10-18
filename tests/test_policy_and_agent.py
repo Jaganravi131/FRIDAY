@@ -1,0 +1,411 @@
+"""Tests for the agent policy surface and the tool registry.
+
+The two properties that matter here are both about *not assuming*:
+
+1. NOTHING IS ENABLED BY DEFAULT. A fresh install has an empty `senses` registry, so
+   every check() that needs a sense denies until you grant it. Tiered consent is the
+   privacy requirement, and "deny until granted" is what makes it real rather than a
+   settings page nobody reads.
+2. IRREVERSIBLE OR EXTERNALLY VISIBLE ACTIONS NEED A HUMAN "YES" EVEN WHEN THE SENSE
+   IS ENABLED. Granting `email.send` authorises FRIDAY to read and compose; it does
+   not authorise it to send on its own initiative. `ALWAYS_CONFIRM` enforces that.
+
+Plus the unattended rule: heartbeat and dreaming run with nobody watching, so a
+confirmation prompt would go unanswered. Those scopes deny outright instead of
+queueing.
+"""
+from __future__ import annotations
+
+from friday.agent.policy import (
+    ALWAYS_CONFIRM,
+    Decision,
+    TOOL_SENSE,
+    UNATTENDED_DENY,
+    check,
+    enabled_senses,
+    grant,
+    log,
+    refusal,
+    revoke,
+)
+
+
+# ── tiered consent ─────────────────────────────────────────────────────────────
+
+
+def test_nothing_is_enabled_on_a_fresh_install(conn):
+    """The privacy default. No senses granted, so nothing that needs one may run.
+
+    ALWAYS_CONFIRM tools report `denied` here, not `confirmation_required`: the
+    sense registry is consulted BEFORE the confirmation gate, because a human
+    "yes" must be the final approval of an action that is otherwise permitted —
+    never a substitute for the permission itself. Asking first would mean a
+    confirmed-but-ungranted tool executes, which is a bypass, not a message.
+    (An earlier version confirmed first; see
+    test_gate_order_is_unattended_then_sense_then_confirmation.)
+    """
+    assert enabled_senses(conn) == []
+    for tool, sense in TOOL_SENSE.items():
+        d = check(conn, tool, {})
+        assert not d.allowed, f"{tool} needs '{sense}' and must not run ungranted"
+        assert d.verdict == "denied", (tool, d.verdict)
+        assert d.sense == sense
+
+
+def test_tools_without_a_sense_are_pure_cognition_and_always_allowed(conn):
+    """A tool absent from TOOL_SENSE requires no sense: it only touches FRIDAY's own
+    memory and reasoning, which is the whole point of running it."""
+    for tool in ("memory_search", "memory_write", "think", "some_unlisted_tool"):
+        assert tool not in TOOL_SENSE
+        d = check(conn, tool, {})
+        assert d.verdict == "allowed", f"{tool} should need no sense"
+        assert d.sense is None
+        assert "no sense required" in d.reason
+
+
+def test_grant_then_check_allows(conn):
+    grant(conn, "screen.capture")
+    assert enabled_senses(conn) == ["screen.capture"]
+    d = check(conn, "screen_read", {"target": "VS Code"})
+    assert d.verdict == "allowed" and d.allowed
+    assert d.sense == "screen.capture"
+
+
+def test_grant_is_idempotent_and_revoke_turns_it_off(conn):
+    grant(conn, "mic.listen")
+    grant(conn, "mic.listen")            # granting twice must not duplicate or error
+    assert enabled_senses(conn) == ["mic.listen"]
+    assert check(conn, "mic_listen", {}).verdict == "allowed"
+
+    revoke(conn, "mic.listen")
+    assert enabled_senses(conn) == []
+    d = check(conn, "mic_listen", {})
+    assert d.verdict == "denied"
+    assert "switched off" in d.reason or "never been granted" in d.reason
+
+
+def test_granting_one_sense_does_not_leak_to_another(conn):
+    """Each sense is approved individually. Granting screen capture must not quietly
+    enable the microphone."""
+    grant(conn, "screen.capture")
+    assert check(conn, "screen_read", {}).verdict == "allowed"
+    assert check(conn, "mic_listen", {}).verdict == "denied"
+    assert check(conn, "email_read", {}).verdict == "denied"
+    assert check(conn, "location_read", {}).verdict == "denied"
+
+
+# ── scope: deny-list wins over allow-list ─────────────────────────────────────
+
+
+def test_grant_scope_allow_list_restricts_targets(conn):
+    grant(conn, "screen.capture", scope={"allow": ["vscode"]})
+    assert check(conn, "screen_read", {"target": "VSCode window"}).verdict == "allowed"
+    d = check(conn, "screen_read", {"target": "Banking app"})
+    assert d.verdict == "denied"
+    assert "outside its scope" in d.reason
+
+
+def test_grant_scope_deny_list_beats_allow_list(conn):
+    """A deny entry wins even when the target also matches an allow entry. Narrow
+    permissions should never be widened by a broader rule sitting next to them."""
+    grant(conn, "screen.capture", scope={"allow": ["code"], "deny": ["secret"]})
+    assert check(conn, "screen_read", {"target": "code editor"}).verdict == "allowed"
+    d = check(conn, "screen_read", {"target": "code secret vault"})
+    assert d.verdict == "denied", "the deny list must win over the allow list"
+
+
+def test_an_absent_scope_means_all_of_that_sense(conn):
+    grant(conn, "screen.capture")            # no scope at all
+    assert check(conn, "screen_read", {"target": "anything whatsoever"}).verdict == "allowed"
+    assert check(conn, "screen_search", {"query": "invoice"}).verdict == "allowed"
+
+
+def test_a_corrupt_scope_grant_denies_rather_than_allowing(conn):
+    """Fail closed. A malformed scope must not be interpreted as 'unrestricted'."""
+    grant(conn, "screen.capture", scope=None)
+    conn.execute("UPDATE senses SET scope=? WHERE id=?", ("{not json", "screen.capture"))
+    d = check(conn, "screen_read", {"target": "anything"})
+    assert d.verdict == "denied", "a corrupt grant is a denied grant"
+
+
+def test_scope_follows_the_url_and_to_args_not_just_target(conn):
+    """⭐ The scope matcher must look at the argument that actually names the
+    destination. `web_read` sends a `url`, `email_send` sends `to` — a matcher
+    that only reads target/app/path sees an empty target for exactly the tools
+    whose destination matters most, and an empty target skipped the allow list
+    entirely. Connectors must be tested with their REAL argument shapes.
+    """
+    grant(conn, "web.read", scope={"allow": ["en.wikipedia.org"]})
+    assert check(conn, "web_read",
+                 {"url": "https://en.wikipedia.org/wiki/Tamil_language"}).verdict == "allowed"
+    d = check(conn, "web_read", {"url": "https://example.com/leak"})
+    assert d.verdict == "denied"
+
+    grant(conn, "email.send", scope={"allow": ["gmail.com"]})
+    assert check(conn, "email_send",
+                 {"to": ["mom@gmail.com"], "subject": "hi"}).verdict == "confirmation_required"
+    d = check(conn, "email_send", {"to": ["stranger@evil.example"], "subject": "hi"})
+    assert d.verdict == "denied"
+
+
+def test_a_scoped_grant_denies_a_call_that_names_no_destination(conn):
+    """Fail closed. If the grant is scoped but the call carries no destination
+    argument at all, there is nothing to match against — and 'cannot tell' must
+    not mean 'allowed'. An earlier version returned True whenever no target was
+    found, so a scoped `email.send` paired with an arg-shape it didn't know
+    silently became an unscoped one."""
+    grant(conn, "email.send", scope={"allow": ["gmail.com"]})
+    d = check(conn, "email_send", {"subject": "hi", "body": "no recipients named"})
+    assert d.verdict == "denied"
+    assert "outside its scope" in d.reason
+
+
+def test_scope_matches_hostnames_not_substrings(conn):
+    """An allow entry that looks like a domain must match the HOST, not any
+    substring of the target. `gmail.com.attacker.example` contains the string
+    "gmail.com"; it is not Gmail. Same for the deny list, in the other direction:
+    a deny on `evil.example` must catch `https://sub.evil.example/x`."""
+    grant(conn, "web.read", scope={"allow": ["gmail.com"]})
+    d = check(conn, "web_read", {"url": "https://gmail.com.attacker.example/phish"})
+    assert d.verdict == "denied", "a lookalike domain is not the allowed domain"
+    # userinfo tricks: the host is what comes AFTER the @
+    d = check(conn, "web_read", {"url": "https://gmail.com@evil.example/"})
+    assert d.verdict == "denied"
+    # ...and a genuine subdomain of the allowed host is in scope
+    assert check(conn, "web_read", {"url": "https://en.gmail.com/"}).verdict == "allowed"
+
+    grant(conn, "email.send", scope={"allow": ["gmail.com"]})
+    # one out-of-scope recipient is a leak, not a partial success
+    d = check(conn, "email_send", {"to": ["mom@gmail.com", "leak@evil.example"]})
+    assert d.verdict == "denied"
+
+    grant(conn, "web.read", scope={"deny": ["evil.example"]})
+    assert check(conn, "web_read", {"url": "https://sub.evil.example/x"}).verdict == "denied"
+    assert check(conn, "web_read", {"url": "https://en.wikipedia.org/"}).verdict == "allowed"
+
+
+# ── the confirmation gate ─────────────────────────────────────────────────────
+
+
+def test_always_confirm_requires_a_yes_even_when_the_sense_is_granted(conn):
+    """⭐ The gate that stops FRIDAY acting on its own initiative. Irreversible or
+    externally visible actions surface the exact payload and wait."""
+    for tool in ALWAYS_CONFIRM:
+        sense = TOOL_SENSE.get(tool)
+        if sense:
+            grant(conn, sense)
+        d = check(conn, tool, {"target": "someone@example.com"}, scope="interactive")
+        assert d.verdict == "confirmation_required", f"{tool} must confirm"
+        assert not d.allowed
+        assert "show the exact payload" in d.reason
+
+
+def test_confirmation_only_applies_when_someone_is_present(conn):
+    """In an unattended scope there is nobody to confirm, so ALWAYS_CONFIRM tools are
+    denied rather than queued forever. UNATTENDED_DENY is checked before
+    ALWAYS_CONFIRM, which is why heartbeat yields `denied` and not a confirmation
+    nobody will ever answer."""
+    grant(conn, "email.send")
+    assert check(conn, "email_send", {}, scope="interactive").verdict == "confirmation_required"
+    assert check(conn, "email_send", {}, scope="heartbeat").verdict == "denied"
+    assert check(conn, "email_send", {}, scope="dreaming").verdict == "denied"
+
+
+def test_gate_order_is_unattended_then_sense_then_confirmation(conn):
+    """The order of the three gates is load-bearing and worth pinning:
+
+      1. unattended scope + UNATTENDED_DENY -> denied (checked before the registry,
+         so heartbeat never even gets to ask whether the sense is granted)
+      2. the sense registry -> never granted / switched off / out of scope are all
+         denied BEFORE any confirmation is requested
+      3. ALWAYS_CONFIRM + interactive -> confirmation_required, the LAST gate
+
+    Confirmation is the LAST gate on purpose. The agent loop treats a returned
+    `confirmation_required` as "everything else passed, awaiting the human": a
+    "yes" hands the tool straight to the registry. An earlier version checked
+    ALWAYS_CONFIRM first, which meant a confirmed-but-ungranted `email_send`
+    EXECUTED — the confirmation was bypassing the permission, not adding to it.
+    Reporting "needs your yes" for a tool that would still be illegal after the
+    yes was also the less useful message.
+    """
+    # gate 2 fires with nothing granted at all — a yes cannot fix "never granted"
+    d = check(conn, "email_send", {}, scope="interactive")
+    assert d.verdict == "denied"
+    assert "never been granted" in d.reason
+
+    # ... nor "switched off"
+    grant(conn, "email.send")
+    conn.execute("UPDATE senses SET enabled=0 WHERE id='email.send'")
+    d = check(conn, "email_send", {}, scope="interactive")
+    assert d.verdict == "denied"
+    assert "switched off" in d.reason
+    conn.execute("UPDATE senses SET enabled=1 WHERE id='email.send'")
+
+    # gate 3 is what's left once the permission genuinely exists
+    assert check(conn, "email_send", {}, scope="interactive").verdict == "confirmation_required"
+
+    # gate 1 fires even with the sense granted
+    assert check(conn, "email_send", {}, scope="heartbeat").verdict == "denied"
+
+    # and the registry path is unchanged for read tools
+    assert check(conn, "email_read", {}, scope="interactive").verdict == "denied"
+    grant(conn, "email.read")
+    assert check(conn, "email_read", {}, scope="interactive").verdict == "allowed"
+
+
+def test_unattended_scopes_deny_anything_touching_the_outside_world(conn):
+    """Heartbeat, dreaming and eval run with nobody watching. They may think and
+    they may read FRIDAY's own memory; they may not email, shell out, write files,
+    post to the network or edit the calendar."""
+    for sense in TOOL_SENSE.values():
+        grant(conn, sense)
+    for scope in ("heartbeat", "dreaming", "eval"):
+        for tool in UNATTENDED_DENY:
+            d = check(conn, tool, {}, scope=scope)
+            assert d.verdict == "denied", f"{tool} in scope {scope} must deny"
+            assert "unattended" in d.reason
+
+
+def test_unattended_scope_may_still_read_and_reason(conn):
+    """Denying the outside world must not paralyse the ambient modes — that is what
+    makes them useful. Reading the screen and searching memory still work."""
+    grant(conn, "screen.capture")
+    grant(conn, "email.read")
+    assert check(conn, "screen_read", {}, scope="heartbeat").verdict == "allowed"
+    assert check(conn, "memory_search", {"query": "rent"}, scope="dreaming").verdict == "allowed"
+    assert check(conn, "email_read", {}, scope="heartbeat").verdict == "allowed"
+
+
+def test_unattended_deny_list_is_a_subset_of_always_confirm():
+    """Everything denied unattended is also confirmation-gated interactively. If a
+    tool were denied unattended but allowed freely interactively, that would mean the
+    gate depends on who is watching rather than on what the action does.
+
+    ⭐ One named exception, added with the read-only web tools: PRESENCE_GATED. For
+    those, who is watching IS the relevant variable — fetching a public page changes
+    nothing anywhere, and the danger is unobserved steering rather than the action
+    itself. The exception is asserted narrowly below so it cannot grow silently.
+
+    ⭐ A second named exception, added with the agentic workspace: ALLOWLIST_GATED.
+    `ws_shell`'s consent surface is the curated program/verb list approved in one
+    explicit grant of workspace.exec; a per-call dialog on every `ls` would fire
+    constantly and get disabled, which is worse than no dialog. Same narrow
+    assertion — it holds exactly one tool, and adding to it means re-arguing why
+    an up-front list cannot carry the consent.
+    """
+    from friday.agent.policy import ALLOWLIST_GATED, PRESENCE_GATED
+
+    assert UNATTENDED_DENY <= ALWAYS_CONFIRM | PRESENCE_GATED | ALLOWLIST_GATED
+    assert ALWAYS_CONFIRM & PRESENCE_GATED == set(), \
+        "a tool is either confirmation-gated or presence-gated, never both"
+    assert ALWAYS_CONFIRM & ALLOWLIST_GATED == set(), \
+        "allowlist-gated replaces per-call confirmation; requiring both is double-gating"
+    assert PRESENCE_GATED == {"web_read", "wiki"}, \
+        "PRESENCE_GATED is a narrow exception for read-only, SSRF-guarded web tools; " \
+        "adding to it means re-arguing why a confirmation dialog would not work"
+    assert ALLOWLIST_GATED == {"ws_shell"}, \
+        "ALLOWLIST_GATED holds only the curated shell: expanding it means the " \
+        "allowlist stopped being small enough to serve as its own consent"
+    assert ALWAYS_CONFIRM - UNATTENDED_DENY == {"delete_fact", "purge_memory"}, \
+        "the two purely-destructive tools confirm interactively but are not in the " \
+        "external-world deny list"
+
+
+def test_presence_gated_tools_are_read_only_and_guarded():
+    """The exception is only legitimate while these tools cannot change anything and
+    cannot be pointed at an internal address."""
+    from friday.agent.tools import build_registry
+    from friday.security import netguard
+
+    names = build_registry(phase=1).names()
+    for tool in ("web_read", "wiki"):
+        assert tool in names
+    # nothing in PRESENCE_GATED may write, send, or execute
+    from friday.agent.policy import ALWAYS_CONFIRM, PRESENCE_GATED
+    assert not (PRESENCE_GATED & ALWAYS_CONFIRM)
+    # and the guard they depend on must actually refuse the internal ranges
+    for url in ("http://127.0.0.1/", "http://169.254.169.254/", "http://10.0.0.1/",
+                "file:///etc/passwd"):
+        assert not netguard.validate_url(url).ok
+
+
+def test_egress_is_announced_without_verbose(conn, capsys):
+    """⭐ Presence is only a control if the fetch is on screen. tool_log used to print
+    solely under --verbose, which made an interactive user present but blind — and an
+    unnoticed URL is an unnoticed exfiltration."""
+    from friday.cli import _announce_egress
+
+    class St:
+        tool_log = [
+            {"origin": "web_read", "target": "https://example.com/a",
+             "injected_tokens": 412, "trust": "external"},
+            {"origin": "wiki", "target": "Chennai", "injected_tokens": 90},
+            {"origin": "memory_search", "target": "rent"},
+            {"origin": "web_read", "url": "http://127.0.0.1:8642/",
+             "error": "refused: loopback"},
+        ]
+
+    _announce_egress(St())
+    out = capsys.readouterr().out
+    assert "https://example.com/a" in out          # the destination is visible
+    assert "Chennai" in out
+    assert "memory_search" not in out              # non-egress tools are not noise here
+    assert "refused" in out and "127.0.0.1" in out  # and a blocked attempt is shown too
+
+
+# ── the refusal message and the audit log ─────────────────────────────────────
+
+
+def test_refusal_explains_itself_in_user_language(conn):
+    """A denial is a conversation, not an error code. FRIDAY says what it wanted to
+    do and what permission is missing."""
+    d = check(conn, "mic_listen", {})
+    r = refusal(d, "mic_listen")
+    assert isinstance(r, dict)
+    assert r.get("verdict") == "denied" or r.get("decision") == "denied"
+    text = str(r)
+    assert "mic.listen" in text or "microphone" in text.lower() or "sense" in text.lower()
+
+
+def test_every_decision_is_written_to_the_audit_log(conn):
+    """Law: FRIDAY keeps a ledger of what it did and why. A denial that is not
+    logged is a denial you cannot audit afterwards."""
+    check(conn, "mic_listen", {})                      # denied, ungranted
+    grant(conn, "mic.listen")
+    check(conn, "mic_listen", {"target": "meeting"})   # allowed
+
+    rows = conn.execute(
+        "SELECT action, decision, sense_id, target FROM audit ORDER BY rowid"
+    ).fetchall()
+    actions = [r["action"] for r in rows]
+    # grant() is itself audited, which is correct: changing your own permissions is
+    # exactly the kind of event you want to be able to look up later.
+    assert "sense.grant" in actions, actions
+
+    mic = [r for r in rows if r["action"] == "mic_listen"]
+    assert len(mic) == 2, f"both the denial and the allow must be logged: {mic}"
+    assert mic[0]["decision"] == "denied", "the ungranted attempt is logged as denied"
+    assert mic[1]["decision"] == "allowed"
+    assert mic[1]["sense_id"] == "mic.listen"
+    assert mic[1]["target"] == "meeting"
+
+
+def test_log_records_an_explicit_action(conn):
+    log(conn, actor="cli", action="memory_write", target="lives_in",
+        sense_id=None, decision="allowed", detail="direct call")
+    row = conn.execute(
+        "SELECT * FROM audit WHERE action='memory_write' ORDER BY rowid DESC LIMIT 1"
+    ).fetchone()
+    assert row is not None
+    assert row["actor"] == "cli"
+    assert row["target"] == "lives_in"
+    assert row["detail"] == "direct call"
+
+
+def test_decision_allowed_treats_redacted_as_a_pass():
+    """A redacted result still ran — it ran with less data. `allowed` covers both so
+    callers do not have to enumerate verdict strings."""
+    assert Decision("allowed").allowed
+    assert Decision("redacted", redactions=["card number"]).allowed
+    assert not Decision("denied").allowed
+    assert not Decision("confirmation_required").allowed
