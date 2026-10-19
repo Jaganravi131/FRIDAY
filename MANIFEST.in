@@ -1,0 +1,7 @@
+include README.md
+include LICENSE
+include friday.yaml.example
+include .env.example
+recursive-include docs *.md
+recursive-include friday/server/static *
+recursive-include examples *.py

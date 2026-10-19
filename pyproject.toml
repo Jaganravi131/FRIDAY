@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "friday-agent"
+version = "0.1.0"
+description = "F.R.I.D.A.Y. — a local-first, tool-using AI agent with a JARVIS-grade HUD."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Jagan Ravi" }]
+keywords = ["ai", "agent", "llm", "tools", "assistant", "friday"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pydantic>=2.8",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+friday = "friday.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Jaganravi131/FRIDAY"
+Repository = "https://github.com/Jaganravi131/FRIDAY"
+Issues = "https://github.com/Jaganravi131/FRIDAY/issues"
+
+[tool.setuptools.packages.find]
+include = ["friday*"]
+
+[tool.setuptools.package-data]
+friday = ["server/static/*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [".venv", ".friday", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["B008", "SIM108"]

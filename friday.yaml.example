@@ -1,0 +1,25 @@
+# Copy to friday.yaml. Environment variables (FRIDAY_*) override these values.
+# Secrets belong in the environment, not in this file.
+
+provider: auto          # auto | openai | anthropic | openrouter | groq | ollama | mock
+model: ""               # empty = provider default
+base_url: ""            # empty = provider default
+temperature: 0.4
+max_tokens: 2048
+
+max_steps: 12
+max_tool_calls: 24
+max_history_messages: 80
+approval: dangerous     # never | dangerous | always
+
+workspace: .            # the filesystem jail for every file tool
+data_dir: ./.friday     # SQLite database and scratch files
+
+host: 0.0.0.0
+port: 8000
+persona: friday         # friday | stark
+
+disabled_tools: []      # e.g. [shell, python_exec]
+plugin_dirs: []         # e.g. [./examples/plugins]
+web_search_provider: auto
+request_timeout: 90
