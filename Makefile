@@ -1,50 +1,49 @@
-.PHONY: help install serve chat test lint fmt check docker demo clean
+PYTHON ?= python3
+VENV   ?= .venv
+BIN    := $(VENV)/bin
 
-PY ?= python3
-VENV ?= .venv
-BIN := $(VENV)/bin
+.PHONY: help install dev test lint wheel serve docker-build docker-run clean
 
 help:
-	@echo "FRIDAY — make targets"
-	@echo "  install   create .venv and install the package with dev deps"
-	@echo "  serve     run the HUD on http://localhost:8000"
-	@echo "  chat      interactive terminal session"
-	@echo "  demo      one-shot demo against the simulation core"
-	@echo "  test      run the test suite"
-	@echo "  lint      ruff check"
-	@echo "  fmt       ruff format"
-	@echo "  check     lint + tests"
-	@echo "  docker    build the container image"
-	@echo "  clean     remove caches (keeps .friday data)"
+	@echo "FRIDAY"
+	@echo "  make install       core only (zero dependencies)"
+	@echo "  make dev           core + dev tools + the web HUD"
+	@echo "  make test          full suite"
+	@echo "  make lint          ruff (pyflakes + import order)"
+	@echo "  make wheel         build a wheel and smoke-test it in a scratch venv"
+	@echo "  make serve         run the HUD on 127.0.0.1:8642"
+	@echo "  make docker-build  build the container"
+	@echo "  make docker-run    run it with a named volume"
 
-install:
-	$(PY) -m venv $(VENV)
-	$(BIN)/pip install -U pip
-	$(BIN)/pip install -e ".[dev]"
+$(BIN)/python:
+	$(PYTHON) -m venv $(VENV)
+	$(BIN)/python -m pip install --upgrade pip
 
-serve:
-	$(BIN)/friday serve
+install: $(BIN)/python
+	$(BIN)/pip install -e .
 
-chat:
-	$(BIN)/friday chat
+dev: $(BIN)/python
+	$(BIN)/pip install -e ".[dev,serve]"
 
-demo:
-	FRIDAY_SIM_PACE=0.015 $(BIN)/friday run "system status and what is 17 * 42 + 9"
+test: dev
+	$(BIN)/python -m pytest
 
-test:
-	$(BIN)/pytest -q
-
-lint:
+lint: dev
 	$(BIN)/ruff check friday tests
 
-fmt:
-	$(BIN)/ruff format friday tests
+wheel: dev
+	$(BIN)/python -m build --wheel
+	$(BIN)/python scripts/check_wheel.py dist
 
-check: lint test
+serve: dev
+	$(BIN)/friday serve --host 127.0.0.1 --port 8642
 
-docker:
-	docker build -t friday:latest .
+docker-build:
+	docker build -t friday:local .
+
+docker-run:
+	docker run --rm -p 8642:8642 -v friday-data:/data friday:local
 
 clean:
-	rm -rf .pytest_cache .ruff_cache build dist *.egg-info
+	rm -rf build dist *.egg-info .pytest_cache .ruff_cache
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

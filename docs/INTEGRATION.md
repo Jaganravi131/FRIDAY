@@ -1,6 +1,12 @@
 # Integration map: five branches, two products, one fork
 
 > Measured on 2026-10-19 against `origin/*`. Reproduce with `scripts/branch_audit.sh`.
+>
+> **Status:** this is the measurement that motivated the unified build, not the
+> build plan. It was acted on in `docs/UNIFIED.md`: the cognition line became the
+> base, the interface line supplied the HUD, two providers and four tools, and the
+> textual merge proposed at the end of §5 was rejected in favour of the graft.
+> The numbers below are unchanged and still reproducible.
 > This document exists because the repository contains **five branch tips that all share one
 > merge-base** — `main` at `84be0d5` — and no branch is a git descendant of any other.
 

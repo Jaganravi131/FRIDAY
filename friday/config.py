@@ -1,245 +1,350 @@
-"""Configuration loading: sane defaults, an optional YAML file, then environment overrides.
+"""Runtime configuration. Defaults live here; config/*.yaml overrides them.
 
-Precedence (lowest to highest): built-in defaults < friday.yaml < FRIDAY_* environment.
-Secrets are never written to disk by FRIDAY and never exposed through the API.
+Deliberately small. Every number in this file is one you will want to change
+after a week of looking at the Ledger printout (docs/architecture/10 Day 4).
 """
 
 from __future__ import annotations
 
+import json
 import os
+import re
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from . import paths
 
-PROVIDER_DEFAULT_MODELS: dict[str, str] = {
-    "openai": "gpt-4o-mini",
-    "anthropic": "claude-sonnet-4-20250514",
-    "openrouter": "openai/gpt-4o-mini",
-    "groq": "llama-3.3-70b-versatile",
-    "ollama": "llama3.2",
-    "mock": "friday-sim-1",
+# ── decay: the forgetting function ─────────────────────────────────────────────
+# Source: docs/architecture/02-INNOVATION-memory-compiler.md §4
+# None means "never decays". This is also L_decay's supervision target
+# (docs/architecture/13 §5.1): the RSC's channel-wise decay alpha_t is initialised
+# toward this policy, then the loss weight anneals to 0 and it learns freely.
+HALF_LIVES_DAYS: dict[str, float | None] = {
+    "mood": 2,             # "stressed about X" — gone fast
+    "current_task": 3,
+    "project_state": 14,
+    "location": 30,
+    "environment": 90,     # "runs Windows 11 on a VivoBook"
+    "relationship": 180,
+    "preference": 365,     # "prefers TypeScript" — very sticky
+    "identity": None,      # "name is Jagan" — never decays
+}
+DEFAULT_HALF_LIFE_DAYS = 90.0
+
+#: below this, drop from the indices (keep in Markdown, struck through)
+DECAY_ARCHIVE_BELOW = 0.15
+#: below this, only surface on a direct query — never auto-inject
+DECAY_DEMOTE_BELOW = 0.40
+#: each access pushes effective age back by this fraction (reinforcement)
+DECAY_REINFORCEMENT = 0.15
+
+# ── source_kind -> base confidence ─────────────────────────────────────────────
+SOURCE_CONFIDENCE = {
+    "user_edit": 1.00,   # ⭐ the trust feature: hand-edits are never auto-overwritten
+    "stated": 0.95,
+    "imported": 0.80,
+    "observed": 0.60,
+    "inferred": 0.40,
 }
 
-PROVIDER_BASE_URLS: dict[str, str] = {
-    "openai": "https://api.openai.com/v1",
-    "anthropic": "https://api.anthropic.com/v1",
-    "openrouter": "https://openrouter.ai/api/v1",
-    "groq": "https://api.groq.com/openai/v1",
-    "ollama": "http://localhost:11434/v1",
+#: Which source may overwrite which. A higher rank wins regardless of confidence —
+#: a *seen* bank statement beats a *said* number, because people misremember their
+#: own rent and statements do not misremember themselves.
+#:
+#: `user_edit` is at the top and is special: nothing automatic may overwrite it at
+#: any confidence (Law 7). A hand-edit means a human opened a file and typed it.
+SOURCE_RANK = {
+    "user_edit": 4,
+    "observed": 3,
+    "imported": 2,
+    "stated": 1,
+    "inferred": 0,
 }
 
-ANTHROPIC_PROVIDERS = {"anthropic"}
+#: Within a rank, the newcomer must beat the incumbent by this much. The margin
+#: exists so a stream of marginally-confident chatter cannot slowly walk a fact
+#: somewhere the user never said it — the failure mode you get with `>` alone.
+CONFIDENCE_MARGIN = 0.05
 
-APPROVAL_MODES = {"never", "dangerous", "always"}
+# ── predicate taxonomy ─────────────────────────────────────────────────────────
+#: only one of these may be true at a time -> writing a new one RETRACTS the old
+#: Predicates where only ONE value can be true at a time, so a new assertion must
+#: RETRACT the old one rather than sit alongside it.
+#:
+#: ⚠️ SYNONYMS MUST BE LISTED TOO, and this is the bug that makes the omission
+#: expensive rather than merely untidy. `employer` was here but `works_at` was not,
+#: so asserting "I work at Acme Corp" and then "I moved to Globex" left BOTH live.
+#: Retrieval then returns two contradictory employers with no way to tell which is
+#: current — the exact failure bi-temporal bookkeeping exists to prevent, and it
+#: fails silently because nothing raises. When you add a predicate, add the ways a
+#: person would naturally say it. PREDICATE_CLASS_RULES below already routes both
+#: spellings to the same decay class, which is how the inconsistency slipped through.
+SINGLE_VALUED_PREDICATES = {
+    # place
+    "lives_in", "address_locality", "home_address", "current_city", "city",
+    # money / housing
+    "lease_amount_monthly", "monthly_rent", "rent", "lease_renewal_due",
+    "landlord", "landlord_name",
+    # work
+    "employer", "works_at", "role", "job_title", "salary",
+    # state
+    "current_task", "mood", "relationship_status",
+    # single owned/contactable things
+    "phone", "phone_model", "email", "bank_account", "vehicle", "timezone",
+    "primary_language", "daily_routine",
+}
+
+#: predicate -> predicate_class (drives decay). Prefix rules, longest match wins.
+PREDICATE_CLASS_RULES: list[tuple[str, str]] = [
+    ("name", "identity"), ("dob", "identity"), ("birth", "identity"),
+    ("gender", "identity"), ("nationality", "identity"), ("native_", "identity"),
+    ("lease_", "environment"), ("rent", "environment"), ("landlord", "relationship"),
+    ("address", "location"), ("lives_in", "location"), ("city", "location"),
+    ("locality", "location"), ("timezone", "environment"),
+    ("prefers", "preference"), ("preference", "preference"), ("likes", "preference"),
+    ("dislikes", "preference"), ("diet", "preference"), ("allerg", "identity"),
+    ("mood", "mood"), ("feeling", "mood"), ("stressed", "mood"),
+    ("current_task", "current_task"), ("todo", "current_task"), ("working_on", "current_task"),
+    ("project", "project_state"), ("deadline", "project_state"), ("due", "project_state"),
+    ("employer", "environment"), ("works_at", "environment"), ("role", "environment"),
+    ("salary", "environment"), ("device", "environment"), ("os", "environment"),
+    ("hardware", "environment"), ("ram", "environment"),
+    ("relation", "relationship"), ("friend", "relationship"), ("family", "relationship"),
+    ("amma", "relationship"), ("appa", "relationship"), ("colleague", "relationship"),
+]
+
+# ── retrieval ──────────────────────────────────────────────────────────────────
+# docs/architecture/04 Law D: wide -> rerank -> narrow -> HARD FLOOR -> []
+RETRIEVAL_K_WIDE = 20
+RETRIEVAL_K_SHIP = 3
+#: ⭐ Law 4. An empty list beats noise. Ask FRIDAY something it has no memory of
+#: and it MUST return [], not three plausible-looking facts. This is the line
+#: between a memory system and a hallucination machine.
+RETRIEVAL_SCORE_FLOOR = 0.35
+RETRIEVAL_GRAPH_HOPS = 2
+EMBED_DIM = 1024
+
+# ── Attention Ledger ───────────────────────────────────────────────────────────
+#: Total working context. Raise this if the backbone is a hybrid linear-attention
+#: model (LFM2 / RWKV-7): a fixed-size state means 32K-128K is affordable on
+#: 16 GB, whereas a Transformer's KV cache caps you at 8-12K.
+#: See docs/architecture/12 §5.4.
+LEDGER_BUDGET_TOKENS = int(os.environ.get("FRIDAY_CTX", "8192"))
+
+#: Per-slot budgets. `identity` + `senses` form the STABLE CACHED PREFIX and must
+#: not change between turns or every turn re-prefills (Law 2).
+LEDGER_SLOTS: dict[str, int] = {
+    # ⭐ 1536, not the 1024 in docs/architecture/04's table. That table assumed a
+    # ~912-token identity; the seeded SOUL.md alone is 889 and AGENTS.md is 344, so a
+    # fresh install shipped with its personality permanently over budget. The choice
+    # was trim the soul or raise the number, and the soul contains the honesty rules,
+    # retraction semantics and code-switching policy that make this a product rather
+    # than a demo — deleting those to satisfy a table cell is backwards. Slot budgets
+    # are soft caps (they already sum above budget - reserve; the ladder handles total
+    # pressure), so +512 here costs nothing structurally. Doc 04's table is the stale
+    # side of this disagreement.
+    # 1792 leaves ~200 tokens of headroom over the seeded content (SOUL.md 889 +
+    # AGENTS.md 344 + the trust-boundary rule ~120). Headroom matters because the
+    # soul is the file a user is MOST likely to edit, and an install that warns the
+    # moment its owner adds a sentence trains them to ignore the warning.
+    "identity": 1792,     # SOUL.md + AGENTS.md — the cached prefix, never rationed
+    "user": 512,          # USER.md (hard budget 1,400 chars ~ 350 tokens)
+    "core_mem": 640,      # MEMORY.md — the ~20 facts that matter most
+    "senses": 256,        # which senses are enabled right now
+    # ⭐ S3 skills index (doc 03: ~30 tok/skill). Stable: skills do not change
+    # mid-session (hand-edits land on the next compile, same rule as soul/).
+    # 192 = ~6 skills visible; the rest are reachable by retrieval — progressive
+    # disclosure is the point, and an empty skill set renders an empty slot, so
+    # a skill-less install compiles the byte-identical prompt it always did.
+    "skills": 192,
+    "recalled": 1200,     # JIT retrieval results (Law 3)
+    "docs": 3000,         # offloaded tool output, pulled by pointer
+    "transcript": 2560,   # recent turns; with an RSC this becomes a fixed state
+    "scratch": 768,       # rolling notes, NOT full history
+}
+#: never let the model eat this — it's the room to answer
+LEDGER_RESERVE_TOKENS = 1024
+#: Rung 1: cap each tool output before it enters history. The -38% cost lever,
+#: recall unchanged. Survives the linear-attention pivot untouched (Rung 0).
+TOOL_OUTPUT_CAP_TOKENS = 2000
+#: Rung 4: offload-to-file-with-pointer above this
+OFFLOAD_ABOVE_TOKENS = 20000
+#: compact when the window is this full (Transformer backbones only; a hybrid
+#: never reaches it because the window does not fill)
+COMPACT_AT_FRACTION = 0.75
+
+# ── inference ──────────────────────────────────────────────────────────────────
+LLM_BASE_URL = os.environ.get("FRIDAY_LLM_URL", "http://127.0.0.1:8080/v1")
+LLM_MODEL = os.environ.get("FRIDAY_LLM_MODEL", "friday-local")
+LLM_API_KEY = os.environ.get("FRIDAY_LLM_KEY", "not-needed")
+LLM_TIMEOUT_S = 120.0
+MAX_AGENT_TURNS = 12
+
+# ── L0 gate / escalation ladder ────────────────────────────────────────────────
+#: ₹0 budget: L2..L5 are DISABLED (docs/architecture/12 §8). When the top rung is
+#: missing, `escalate` must degrade to "ask the user", never "guess confidently".
+CLOUD_TIERS_ENABLED = False
+L0_MAX_CHARS_FOR_LOCAL = 400
 
 
-def _env(name: str) -> str | None:
-    value = os.environ.get(f"FRIDAY_{name}")
-    return value if value not in (None, "") else None
+@dataclass
+class Settings:
+    """Everything above, as one object you can pass around and dump."""
 
+    half_lives: dict[str, Any] = field(default_factory=lambda: dict(HALF_LIVES_DAYS))
+    source_confidence: dict[str, float] = field(default_factory=lambda: dict(SOURCE_CONFIDENCE))
+    ledger_budget: int = LEDGER_BUDGET_TOKENS
+    ledger_slots: dict[str, int] = field(default_factory=lambda: dict(LEDGER_SLOTS))
+    reserve: int = LEDGER_RESERVE_TOKENS
+    score_floor: float = RETRIEVAL_SCORE_FLOOR
+    k_wide: int = RETRIEVAL_K_WIDE
+    k_ship: int = RETRIEVAL_K_SHIP
+    embed_dim: int = EMBED_DIM
+    llm_base_url: str = LLM_BASE_URL
+    llm_model: str = LLM_MODEL
+    cloud_tiers_enabled: bool = CLOUD_TIERS_ENABLED
 
-def _as_bool(value: str | bool) -> bool:
-    if isinstance(value, bool):
-        return value
-    return value.strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _as_list(value: str | list[str] | None) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
-    return [item.strip() for item in value.replace(";", ",").split(",") if item.strip()]
-
-
-class Settings(BaseModel):
-    """Runtime configuration for a FRIDAY instance."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    # Brain
-    provider: str = "auto"
-    model: str = ""
-    base_url: str = ""
-    api_key: str = ""
-    temperature: float = 0.4
-    max_tokens: int = 2048
-
-    # Loop discipline
-    max_steps: int = 12
-    max_tool_calls: int = 24
-    max_history_messages: int = 80
-    approval: str = "dangerous"
-
-    # Filesystem
-    workspace: Path = Field(default_factory=Path.cwd)
-    data_dir: Path = Field(default_factory=lambda: Path.cwd() / ".friday")
-    db_path: Path | None = None
-
-    # Interface
-    host: str = "0.0.0.0"
-    port: int = 8000
-    persona: str = "friday"
-
-    # Extensibility / safety
-    disabled_tools: list[str] = Field(default_factory=list)
-    plugin_dirs: list[str] = Field(default_factory=list)
-    web_search_provider: str = "auto"
-    tavily_api_key: str = ""
-    request_timeout: float = 90.0
-
-    @field_validator("approval")
     @classmethod
-    def _valid_approval(cls, value: str) -> str:
-        value = (value or "dangerous").lower()
-        if value not in APPROVAL_MODES:
-            raise ValueError(f"approval must be one of {sorted(APPROVAL_MODES)}")
-        return value
+    def load(cls, path: Path | None = None) -> "Settings":
+        """Defaults, then optional JSON overrides from config/settings.json."""
+        s = cls()
+        p = path or (paths.CONFIG / "settings.json")
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            for k, v in data.items():
+                if hasattr(s, k):
+                    setattr(s, k, v)
+        return s
 
-    @field_validator("provider")
-    @classmethod
-    def _valid_provider(cls, value: str) -> str:
-        return (value or "auto").lower().strip()
+    def dump(self) -> dict[str, Any]:
+        return asdict(self)
 
-    def model_post_init(self, __context: Any) -> None:
-        self.workspace = Path(self.workspace).expanduser().resolve()
-        self.data_dir = Path(self.data_dir).expanduser().resolve()
-        if self.db_path is None:
-            self.db_path = self.data_dir / "friday.db"
-        else:
-            self.db_path = Path(self.db_path).expanduser().resolve()
-        self._resolve_provider()
 
-    # ------------------------------------------------------------------ load
-    @classmethod
-    def load(cls, config_path: str | Path | None = None) -> Settings:
-        raw: dict[str, Any] = {}
+SETTINGS = Settings.load()
 
-        candidate = Path(config_path) if config_path else Path(_env("CONFIG") or "friday.yaml")
-        if candidate.is_file():
-            loaded = yaml.safe_load(candidate.read_text(encoding="utf-8")) or {}
-            if not isinstance(loaded, dict):
-                raise ValueError(f"{candidate} must contain a YAML mapping")
-            raw.update(loaded)
 
-        # ---- environment overrides ----
-        env_map: dict[str, tuple[str, Any]] = {
-            "provider": ("PROVIDER", str),
-            "model": ("MODEL", str),
-            "base_url": ("BASE_URL", str),
-            "temperature": ("TEMPERATURE", float),
-            "max_tokens": ("MAX_TOKENS", int),
-            "max_steps": ("MAX_STEPS", int),
-            "max_tool_calls": ("MAX_TOOL_CALLS", int),
-            "max_history_messages": ("MAX_HISTORY_MESSAGES", int),
-            "approval": ("APPROVAL", str),
-            "workspace": ("WORKSPACE", str),
-            "data_dir": ("DATA_DIR", str),
-            "db_path": ("DB_PATH", str),
-            "host": ("HOST", str),
-            "port": ("PORT", int),
-            "persona": ("PERSONA", str),
-            "web_search_provider": ("WEB_SEARCH_PROVIDER", str),
-            "request_timeout": ("REQUEST_TIMEOUT", float),
-        }
-        tavily_key = _env("TAVILY_API_KEY") or os.environ.get("TAVILY_API_KEY")
-        if tavily_key:
-            raw["tavily_api_key"] = tavily_key
-        for field_name, (env_name, caster) in env_map.items():
-            value = _env(env_name)
-            if value is not None:
-                try:
-                    raw[field_name] = caster(value)
-                except ValueError as exc:
-                    raise ValueError(f"invalid FRIDAY_{env_name}: {value!r}") from exc
+#: How people SAY a predicate, as opposed to how it is spelled in the store.
+#:
+#: This is not a convenience. FTS5 tokenises `lease_amount_monthly` as ONE token, so
+#: the query "what's my rent?" matches nothing — the user's word and the store's word
+#: share no substring. Without this map, semantic retrieval is the only bridge, and
+#: the zero-dependency hashing embedder is a lexical n-gram hasher with no idea that
+#: "rent" and "lease" are related. So on a fresh machine with no model server, every
+#: natural-language query about money would return [].
+#:
+#: Snake_case splitting (done automatically) covers "monthly" and "lease"; this map
+#: covers the synonyms that no amount of splitting will produce.
+#: predicate -> the ways a person would actually ASK about it.
+#:
+#: Two jobs, and they fail differently. At INDEX time these strings are folded into
+#: the FTS body, so a natural-language query can reach a snake_case predicate at all.
+#: At RERANK time `_rerank_text` appends them, which is what lets the stdlib lexical
+#: fallback score "where do I work" against `works_at: Globex` above the floor
+#: instead of returning 0.000. Without them the no-dependency retrieval path finds
+#: the right candidate and then throws it away.
+#:
+#: ⚠️ Cover the SYNONYMS, not just the canonical name. `lease_amount_monthly` had
+#: aliases and `monthly_rent` had none, so "what is my monthly rent" depended on
+#: stemming to bridge a gap the alias table was supposed to close.
+PREDICATE_ALIASES: dict[str, tuple[str, ...]] = {
+    "lease_amount_monthly": ("rent", "monthly rent", "house rent", "rent amount"),
+    "monthly_rent": ("rent", "monthly rent", "house rent", "rent amount", "lease"),
+    "rent": ("monthly rent", "house rent", "rent amount", "lease"),
+    "works_at": ("employer", "company", "workplace", "where do i work", "job"),
+    "name": ("called", "who is", "full name"),
+    "landlord_name": ("landlord", "house owner"),
+    "lease_renewal_due": ("lease renewal", "renewal date", "lease expiry"),
+    "address_locality": ("area", "neighbourhood", "neighborhood", "where do i live"),
+    "lives_in": ("city", "where do i live", "current city"),
+    "employer": ("company", "workplace", "where do i work", "job"),
+    "current_task": ("working on", "current work", "in progress"),
+    "phone_model": ("phone", "mobile", "handset"),
+    "primary_language": ("language", "languages spoken"),
+    "landlord": ("house owner", "landlord name"),
+    "cloud_budget": ("budget", "api budget", "spend"),
+    "training_compute": ("gpu", "compute", "kaggle"),
+}
 
-        disabled = _env("DISABLED_TOOLS")
-        if disabled is not None:
-            raw["disabled_tools"] = _as_list(disabled)
-        plugins = _env("PLUGIN_DIRS")
-        if plugins is not None:
-            raw["plugin_dirs"] = _as_list(plugins)
 
-        return cls(**raw)
+def aliases_for(predicate: str) -> tuple[str, ...]:
+    """Human phrasings for a predicate, plus its snake_case parts split into words.
 
-    def _resolve_provider(self) -> None:
-        """Pick a provider (and its key/model defaults) when set to auto."""
-        explicit_key = self.api_key or _env("API_KEY") or ""
-        explicit_base = bool(self.base_url)
-        self.api_key = explicit_key
+    The split is unconditional and cheap; the alias map covers what splitting cannot.
+    """
+    p = (predicate or "").strip().lower()
+    out = list(PREDICATE_ALIASES.get(p, ()))
+    parts = [w for w in re.split(r"[_\-\s]+", p) if w]
+    if len(parts) > 1:
+        out.append(" ".join(parts))       # "lease amount monthly" as a phrase
+        out.extend(parts)                 # and each word on its own
+    seen: dict[str, None] = {}
+    for o in out:
+        if o and o != p:
+            seen.setdefault(o, None)
+    return tuple(seen)
 
-        if self.provider == "auto":
-            if explicit_key and self.base_url or os.environ.get("OPENAI_API_KEY"):
-                self.provider = "openai"
-            elif os.environ.get("ANTHROPIC_API_KEY"):
-                self.provider = "anthropic"
-            elif os.environ.get("OPENROUTER_API_KEY"):
-                self.provider = "openrouter"
-            elif os.environ.get("GROQ_API_KEY"):
-                self.provider = "groq"
-            elif os.environ.get("OLLAMA_HOST"):
-                self.provider = "ollama"
-            else:
-                self.provider = "mock"
 
-        if not self.api_key:
-            key_env = {
-                "openai": "OPENAI_API_KEY",
-                "anthropic": "ANTHROPIC_API_KEY",
-                "openrouter": "OPENROUTER_API_KEY",
-                "groq": "GROQ_API_KEY",
-            }.get(self.provider)
-            if key_env:
-                self.api_key = os.environ.get(key_env, "")
+def predicate_class_of(predicate: str) -> str:
+    """Longest-prefix rule match; falls back to 'environment' (90-day half-life)."""
+    p = predicate.lower().strip()
+    best = ("", "environment")
+    for prefix, klass in PREDICATE_CLASS_RULES:
+        if prefix in p and len(prefix) > len(best[0]):
+            best = (prefix, klass)
+    return best[1]
 
-        if not self.base_url:
-            self.base_url = PROVIDER_BASE_URLS.get(self.provider, "")
 
-        keyed = {"openai", "anthropic", "openrouter", "groq"}
-        if self.provider in keyed and not self.api_key and not explicit_base:
-            # A key was requested but none exists; be honest about running the demo core.
-            self.provider = "mock"
+#: non-canonical predicate -> the ONE predicate FRIDAY stores it under.
+#:
+#: ⭐ WHY THIS EXISTS. Without it, "what is my monthly rent" has two right answers.
+#: The seed data says `lease_amount_monthly: ₹28,000`; a user who types
+#: `friday write monthly_rent 18000` creates a SECOND live fact, because
+#: `_blocked_by` and `_reconcile` both match on exact (subject, predicate). Neither
+#: is single-valued against the other, so both stay live and retrieval returns
+#: whichever reranks higher. Observed: FRIDAY confidently answered ₹28,000 seconds
+#: after being told 18000 — the single worst failure mode for a context-aware
+#: assistant, because the answer is fluent, sourced, and wrong.
+#:
+#: DELIBERATELY CONSERVATIVE. Only predicates that mean the SAME THING are merged.
+#: `lives_in` (city) and `address_locality` (neighbourhood) are NOT merged, and
+#: neither are `landlord` / `landlord_name` with anything else — collapsing two
+#: genuinely different facts is worse than duplicating one, because it destroys data
+#: rather than merely confusing a query. Add to this map only when you are certain
+#: the two predicates cannot both be true at once with different values.
+CANONICAL_PREDICATES: dict[str, str] = {
+    # rent: one monthly amount for the place you live
+    "monthly_rent": "lease_amount_monthly",
+    "rent": "lease_amount_monthly",
+    "house_rent": "lease_amount_monthly",
+    "rent_amount": "lease_amount_monthly",
+    "rent_monthly": "lease_amount_monthly",
+    # employer: one place you work
+    "works_at": "employer",
+    "company": "employer",
+    "workplace": "employer",
+    # the person's own name
+    "full_name": "name",
+    # how you get to work / where you are
+    "current_city": "lives_in",
+}
 
-        if not self.model:
-            self.model = PROVIDER_DEFAULT_MODELS.get(self.provider, "")
 
-        if self.provider == "mock":
-            self.api_key = ""
-            self.base_url = ""
+def canonical_predicate(predicate: str) -> str:
+    """Map a predicate to the one FRIDAY stores it under.
 
-    # ------------------------------------------------------------- accessors
-    @property
-    def is_simulation(self) -> bool:
-        """True when no real model is configured; the deterministic demo core runs."""
-        return self.provider == "mock"
+    Idempotent, and identity for anything not in the map — so a canonical predicate
+    passes through untouched and an unknown one is preserved rather than mangled.
+    """
+    p = (predicate or "").strip().lower()
+    return CANONICAL_PREDICATES.get(p, predicate or "")
 
-    @property
-    def db_file(self) -> Path:
-        return Path(self.db_path or self.data_dir / "friday.db")
 
-    @property
-    def static_dir(self) -> Path:
-        return Path(__file__).parent / "server" / "static"
+def is_single_valued(predicate: str) -> bool:
+    # Normalise first: `monthly_rent` must be single-valued because the fact is
+    # STORED as `lease_amount_monthly`, and checking the alias would miss it.
+    return canonical_predicate(predicate).lower().strip() in SINGLE_VALUED_PREDICATES
 
-    def ensure_dirs(self) -> None:
-        self.data_dir.mkdir(parents=True, exist_ok=True)
-        self.db_file.parent.mkdir(parents=True, exist_ok=True)
 
-    def public_dict(self) -> dict[str, Any]:
-        """Configuration safe to ship to a browser — never includes the API key."""
-        return {
-            "provider": self.provider,
-            "model": self.model,
-            "base_url": self.base_url,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
-            "max_steps": self.max_steps,
-            "max_tool_calls": self.max_tool_calls,
-            "approval": self.approval,
-            "workspace": str(self.workspace),
-            "simulation": self.is_simulation,
-            "persona": self.persona,
-            "disabled_tools": self.disabled_tools,
-        }
+def half_life_of(predicate_class: str) -> float | None:
+    return SETTINGS.half_lives.get(predicate_class, DEFAULT_HALF_LIFE_DAYS)
