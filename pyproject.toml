@@ -1,0 +1,81 @@
+[project]
+name = "friday"
+version = "0.1.0"
+description = "FRIDAY — a local-first agent with bi-temporal memory, a streaming HUD, tools and human-in-the-loop approvals."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Jagan Ravi" }]
+keywords = ["ai", "agent", "llm", "memory", "assistant", "local-first", "friday"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# ── The core is deliberately STDLIB-ONLY. ───────────────────────────────────────
+# `pip install -e .` with zero dependencies must give you a working memory system:
+# Markdown truth -> SQLite/FTS5 indices -> retrieval -> Attention Ledger -> agent
+# loop -> RSC operators. Optional extras below add GPU/embedding/reranker quality,
+# never correctness. If an extra is missing the code degrades to a documented
+# fallback instead of raising ImportError. This is what makes the whole thing
+# runnable on a 16 GB laptop with no CUDA and on a free Kaggle T4 alike.
+dependencies = []
+
+[project.optional-dependencies]
+# Real semantic retrieval. Without it: HashingEmbedder (deterministic, lexical).
+embed = ["sentence-transformers>=2.7", "onnxruntime>=1.17"]
+# Real cross-encoder reranking. Without it: lexical-overlap reranker.
+rerank = ["onnxruntime>=1.17"]
+# File-watcher so hand-edits to memory/facts/*.md take effect in <1s (Law 7).
+watch = ["watchdog>=4.0"]
+# The CLI you'll actually live in.
+cli = ["rich>=13.7", "prompt_toolkit>=3.0"]
+# Retention State Compiler training. Pure-Python fallback runs without these.
+rsc = ["numpy>=1.26"]
+rsc-gpu = ["numpy>=1.26", "torch>=2.3"]
+# Telemetry / scheduling.
+serve = ["fastapi>=0.111", "uvicorn[standard]>=0.30", "apscheduler>=3.10"]
+dev = ["pytest>=8.0", "pytest-subtests>=0.11", "ruff>=0.5", "build>=1.0",
+       "httpx>=0.27"]   # Starlette TestClient transport (web tests only)
+
+all = ["friday[embed,rerank,watch,cli,rsc,serve,dev]"]
+
+[project.scripts]
+friday = "friday.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/Jaganravi131/FRIDAY"
+Repository = "https://github.com/Jaganravi131/FRIDAY"
+Issues = "https://github.com/Jaganravi131/FRIDAY/issues"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["friday", "friday.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"friday.store" = ["schema.sql"]
+"friday.web" = ["static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+# Pyflakes + import order is the gate. The broader style families (BLE001, RUF059,
+# E701) are deliberately NOT selected: this codebase uses `except Exception` in
+# places where a failure must be contained, and it has earned each one. A gate that
+# demands 55 mechanical no-op changes is a gate people disable.
+[tool.ruff.lint]
+select = ["E4", "E9", "F", "I"]

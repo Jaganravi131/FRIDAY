@@ -1,0 +1,130 @@
+# ⚠️ THE LOCKED SUITE. The agent has NO write access to eval/.
+#
+# Law 6: FRIDAY may edit itself. It may never edit its examiner.
+# Law 2c: recall is a property of a CHECKPOINT, not an architecture. CoT
+#         post-training has been shown to DEGRADE long-range recall in hybrids, and
+#         the other suites will not catch it — they measure task success, not
+#         retrieval. This suite exists so a gate pass with a needle regression is
+#         correctly scored as a REGRESSION.
+#
+# Weight 0.25 in the Constitutional Eval Gate (docs/architecture/06).
+
+suite: personal-recall
+version: 1
+weight: 0.25
+locked: true
+
+description: >
+  Can FRIDAY retrieve a specific personal fact, verbatim, at depth — and can it
+  distinguish what is currently true from what it used to believe? This is the
+  capability a fixed-size recurrent state loses FIRST, so it is the capability that
+  must be measured most often.
+
+# ── the decisive benchmark ─────────────────────────────────────────────────────
+needle:
+  script: scripts/needle_test.py
+  length_tokens: 8000
+  depths: [500, 2000, 4000, 6000, 7500]
+  trials: 20
+  metric: exact_match
+  # Decision rule from docs/architecture/12 §5.3. A hybrid backbone must clear 0.90;
+  # below 0.60 the recall gap is real at this scale and the external store has to
+  # carry recall entirely (which is survivable, but changes the design).
+  pass_at: 0.90
+  fail_below: 0.60
+  # Look at the DEEPEST row, not the average. 0.95 at depth 500 and 0.10 at 7500 is
+  # not a 0.5 model — it is a model with no long-range memory, and the mean hides it.
+  report_per_depth: true
+
+# ── bi-temporal: the two-axes test ─────────────────────────────────────────────
+temporal:
+  cases:
+    - id: current-value
+      setup: "assert lease_amount_monthly=₹28,000 after retracting ₹24,000"
+      ask: "What's my rent?"
+      must_contain: ["28,000"]
+      must_not_contain: ["24,000"]
+      why: "a retracted fact must never answer a present-tense query"
+
+    - id: belief-time
+      setup: "same as above"
+      ask: "What did I used to think my rent was?"
+      must_contain: ["24,000"]
+      why: >
+        belief-time travel. This is the query that makes retraction-never-deletion
+        load-bearing, and it is the reason `history` and `beliefs_at` exist.
+
+    - id: world-time
+      setup: "assert lives_in=Chennai valid_from 2023-06; a prior value valid_to 2023-05"
+      ask: "Where did I live in 2022?"
+      as_of: "2022-06-01"
+      must_not_contain: ["Chennai"]
+      why: "world-time travel must not be satisfied by the current fact"
+
+    - id: provenance
+      setup: "any stated fact with a source_quote"
+      ask: "Why do you think I live in Velachery?"
+      must_contain_any: ["stated", "learned", "you told me", "observed"]
+      why: >
+        every personal claim carries provenance (SOUL.md honesty rule 1). A fact
+        without provenance is a rumour.
+
+# ── the floor ──────────────────────────────────────────────────────────────────
+floor:
+  cases:
+    - id: unknown-fact
+      ask: "What is my mother's maiden name?"
+      expect_empty_retrieval: true
+      must_contain_any: ["don't know", "do not know", "no memory", "not sure", "haven't"]
+      must_not_contain_any: ["probably", "I believe it is", "likely"]
+      why: >
+        Law 4. [] beats noise. This single case is the difference between a memory
+        system and a hallucination machine, and small models fail it constantly.
+    - id: no-retry
+      ask: "What's my favourite colour?"
+      expect_max_tool_calls: 2
+      why: "the tool docstring says don't re-ask more than once; measure that it holds"
+
+# ── interference: the EDA discriminator ────────────────────────────────────────
+# Only meaningful once the RSC exists (Phase 3.5). Included here from day one so the
+# baseline is recorded before there is anything to compare against.
+interference:
+  cases:
+    - id: address-distinct-correction
+      setup: >
+        week 1: assert address="12 Marina Road" at key A.
+        week 3: assert address="48 Velachery Main" at key B (B != A).
+      ask: "What's my address?"
+      must_contain: ["48 Velachery Main"]
+      must_not_contain: ["12 Marina Road"]
+      probe: friday.rsc.ablation.probe_interference
+      metrics: [retain_old, new_write_err, crosstalk_new_into_old]
+      why: >
+        The bi-temporal correction case in miniature, and the ONLY probe that
+        separates rung 4 (GDN-2) from rung 5 (EDA). GDN-2's erase direction is
+        b_t ⊙ k_t — built from the CURRENT write key — so it cannot suppress a stale
+        association at a DIFFERENT address. If this case fails on GDN-2 and passes on
+        EDA, the address-level coupling was real for this data.
+
+# ── the alarm ──────────────────────────────────────────────────────────────────
+ledger:
+  assertions:
+    - name: no-rung-5
+      condition: "compiled.summarised == False"
+      severity: hard
+      why: >
+        Law 2. Summarisation dropped in-session recall 92% -> ~33% in one production
+        eval while costing twice as much as keeping everything. Under a hybrid
+        backbone rung 5 is unreachable by construction; if this fires, the backbone
+        flag is wrong or the window is misconfigured.
+    - name: reserve-positive
+      condition: "compiled.reserve > 0"
+      severity: hard
+      why: "if the ledger eats the reserve, the model has no room to answer"
+    - name: prefix-stable
+      condition: "compiled.cache_hit == True"
+      severity: soft
+      why: >
+        The stable prefix must be byte-identical across turns or every turn
+        re-prefills. Soft because it is architecture-contingent: under a recurrent
+        state there is no prefix to cache-break, so this becomes informational.
