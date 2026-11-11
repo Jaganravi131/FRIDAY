@@ -4,8 +4,8 @@
 human in the loop.**
 
 FRIDAY is not a chat wrapper. It is a complete agent runtime: a synchronous ReAct
-loop, a bi-temporal memory that compiles Markdown into SQLite/FTS indices, fourteen
-tools behind a deterministic policy engine, an approval gate for dangerous actions,
+loop, a bi-temporal memory that compiles Markdown into SQLite/FTS indices, a
+phase-gated toolset (4 → 18) behind a deterministic policy engine, an approval gate for dangerous actions,
 a FastAPI + SSE web interface, a CLI, and a test suite that runs with **no API key
 and no model download**.
 

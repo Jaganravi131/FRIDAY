@@ -1,7 +1,7 @@
 # ── artifacts are BUILD OUTPUTS ────────────────────────────────────────────────
 # Law: `rm -rf artifacts && python -m friday build` restores everything.
 # Truth lives in Markdown under memory/ and soul/. Never commit derived state.
-artifacts/
+/artifacts/
 *.db
 *.db-wal
 *.db-shm
@@ -64,13 +64,16 @@ llama.cpp-master/
 # ── container state ────────────────────────────────────────────────────────────
 # `docker compose` mounts ./data when run without the named volume; memory is
 # user data and never belongs in git.
-data/
+/data/
 
 # ── runtime state created by `friday serve` ───────────────────────────────────
 # The token is a credential and the memory trees are the USER's data. Neither is
 # part of the distribution; the CI hygiene job fails if either is ever tracked.
-config/serve.token
-config/*.token
-memory/
-soul/
-artifacts/
+# ANCHORED TO THE REPO ROOT. A bare `memory/` matches `friday/memory/` at any
+# depth and silently removes the memory package from the distribution — which is
+# exactly what happened once, and is why these patterns start with a slash.
+/config/serve.token
+/config/*.token
+/memory/
+/soul/
+/artifacts/

@@ -10,11 +10,11 @@ dist
 .pytest_cache
 .ruff_cache
 .mypy_cache
-artifacts
-data
-memory
-soul
-config
+/artifacts
+/data
+/memory
+/soul
+/config
 eval
 docs
 tests
