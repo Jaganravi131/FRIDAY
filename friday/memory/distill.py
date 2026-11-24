@@ -155,6 +155,15 @@ def distill_prompt(conn: sqlite3.Connection, session_id: str | None = None,
                 parts.append(f"--- skill: {s['name']} ---\n{s['text']}")
     else:
         parts.append("(library is empty — every proposal is a create)")
+    from .skills import low_confidence_skills
+    flagged = low_confidence_skills(conn)
+    if flagged:
+        lines = [
+            f"- {f['name']} (avg_conf={f['avg_confidence']:.2f}, failures={f['failures']})"
+            for f in flagged
+        ]
+        parts.append("Underperforming skills (low confidence or recorded failures — "
+                     "prioritize patching if relevant):\n" + "\n".join(lines))
     parts.append("Recent conversation (user turns only, newest last):\n\n"
                  + "\n\n".join(f"User: {t}" for t in rt.turns))
     return "\n\n".join(parts)

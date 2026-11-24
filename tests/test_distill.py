@@ -477,3 +477,45 @@ def test_a_turn_that_ships_a_skill_body_counts_as_a_use(root):
         ).fetchone()["u"] == 1, "a shipped skill body must count as a use"
     finally:
         conn.close()
+
+
+def test_skill_activation_confidence_and_failure_telemetry(root):
+    from friday.memory.skills import low_confidence_skills, record_activations, register_skills
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        _mk(root, name="lease-alpha", when="for alpha lease tasks")
+        _mk(root, name="lease-beta", when="for beta lease tasks")
+        register_skills(conn)
+
+        assert record_activations(conn, ["lease-alpha"], confidence=0.55, failed=True) == 1
+        assert record_activations(conn, ["lease-beta"], confidence=0.95, failed=False) == 1
+
+        flagged = low_confidence_skills(conn, threshold=0.7)
+        assert len(flagged) == 1
+        assert flagged[0]["name"] == "lease-alpha"
+        assert flagged[0]["failures"] == 1
+        assert flagged[0]["avg_confidence"] < 0.7
+    finally:
+        conn.close()
+
+
+def test_distill_prompt_surfaces_underperforming_skills(root):
+    from friday.memory.distill import distill_prompt
+    from friday.memory.skills import record_activations, register_skills
+
+    conn = db.connect(root / "artifacts" / "friday.db")
+    try:
+        _mk(root, name="lease-alpha", when="for alpha lease tasks")
+        register_skills(conn)
+        _seed(conn, ["draft the notice 30 days before the lease renews"])
+
+        clean_prompt = distill_prompt(conn)
+        assert "Underperforming skills" not in clean_prompt
+
+        record_activations(conn, ["lease-alpha"], confidence=0.5, failed=True)
+        flagged_prompt = distill_prompt(conn)
+        assert "Underperforming skills" in flagged_prompt
+        assert "lease-alpha (avg_conf=0.50, failures=1)" in flagged_prompt
+    finally:
+        conn.close()

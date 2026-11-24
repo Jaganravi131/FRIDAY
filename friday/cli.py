@@ -766,6 +766,13 @@ def cmd_skills(args) -> int:
     for r in rows:
         _say(f"  {r['name']:<24} {r['status']:<8} {r['uses']:>3}×  {r['when_to_use']}")
     _say_dreams()
+    from .memory.skills import low_confidence_skills
+    flagged = low_confidence_skills(conn)
+    if flagged:
+        _say(f"{len(flagged)} skill(s) with low confidence or failures:")
+        for f in flagged:
+            _say(f"  ! {f['name']:<22} avg_conf={f['avg_confidence']:.2f} "
+                 f"failures={f['failures']} ({f['activations']}×)")
     return 0
 
 
