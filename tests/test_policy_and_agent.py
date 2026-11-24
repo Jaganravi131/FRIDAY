@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from friday.agent.policy import (
     ALWAYS_CONFIRM,
-    Decision,
     TOOL_SENSE,
     UNATTENDED_DENY,
+    Decision,
     check,
     enabled_senses,
     grant,
@@ -28,7 +28,6 @@ from friday.agent.policy import (
     refusal,
     revoke,
 )
-
 
 # ── tiered consent ─────────────────────────────────────────────────────────────
 

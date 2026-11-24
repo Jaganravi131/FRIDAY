@@ -32,13 +32,12 @@ rule here follows from that asymmetry; they are LOAD-BEARING, not style:
 """
 from __future__ import annotations
 
-from ..util import swallowed
-
 import email.utils
 import re
 import smtplib
 from email.message import EmailMessage
 
+from ..util import swallowed
 from . import Connector, config_help, load_config, register
 
 SMTP_HOST_DEFAULT = "smtp.gmail.com"

@@ -9,9 +9,9 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from friday.config import predicate_class_of
-
 import pytest
+
+from friday.config import predicate_class_of
 
 
 def _t(days: int = 0) -> str:

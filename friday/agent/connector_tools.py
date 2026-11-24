@@ -19,11 +19,9 @@ where every access is:
 """
 from __future__ import annotations
 
-from ..util import swallowed
-
 from ..connectors import get as _get_connector
 from ..security import Verdict, detect, neutralize
-from ..util import cap_tokens
+from ..util import cap_tokens, swallowed
 
 EMAIL_READ_DOC = (
     "Read recent email from a configured connector (currently 'gmail' via IMAP, "

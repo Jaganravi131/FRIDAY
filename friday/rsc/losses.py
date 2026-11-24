@@ -27,7 +27,6 @@ import math
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
-
 # ── primitives ─────────────────────────────────────────────────────────────────
 
 def kl_divergence(p: Sequence[float], q: Sequence[float], eps: float = 1e-9) -> float:

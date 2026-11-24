@@ -64,6 +64,11 @@ TOOL_SENSE: dict[str, str] = {
     "ws_read": "workspace.files",
     "ws_write": "workspace.files",
     "ws_shell": "workspace.exec",
+    # The two HUD-line tools that touch the workspace use the SAME sense as the
+    # ws_* family. A second permission for the same folder would be a second thing
+    # to grant, forget, and explain.
+    "file_edit": "workspace.files",
+    "file_grep": "workspace.files",
 }
 
 #: Irreversible or externally-visible actions always require a human "yes", even

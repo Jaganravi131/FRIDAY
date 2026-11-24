@@ -114,8 +114,9 @@ def test_endpoint_is_fixed_not_from_config(gh_cfg):
 
 
 def test_verb_allowlist_is_exactly_get():
-    from friday.connectors import github_api
     import inspect
+
+    from friday.connectors import github_api
     src = inspect.getsource(github_api._get)
     assert 'method="GET"' in src
     assert "POST" not in src and "PATCH" not in src and "DELETE" not in src
@@ -151,8 +152,8 @@ def test_no_notifications_when_asked(monkeypatch, gh_cfg):
 
 
 def test_github_read_tool_summarises_and_never_trusts(monkeypatch, gh_cfg, root):
-    from friday.connectors import github_api
     from friday.agent.connector_tools import github_read
+    from friday.connectors import github_api
     monkeypatch.setattr(github_api, "_get", _Wire.get)
 
     conn, ctx = _ctx(root)

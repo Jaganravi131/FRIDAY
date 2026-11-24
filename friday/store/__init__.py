@@ -2,8 +2,8 @@
 
 from .db import (
     HAS_VEC_EXT,
-    connect,
     apply_schema,
+    connect,
     fts_delete,
     fts_query,
     fts_search,

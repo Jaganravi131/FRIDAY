@@ -23,7 +23,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from .. import paths
@@ -702,6 +702,41 @@ def _index_retraction(conn: sqlite3.Connection, fact_id: str) -> None:
 
 
 # ── reads ──────────────────────────────────────────────────────────────────────
+
+def retract_fact(conn: sqlite3.Connection, fact_id: str, *, when: str | None = None) -> bool:
+    """Retract one fact: Markdown struck through, SQLite row closed, FTS kept.
+
+    This is the user-facing "forget that" path (the HUD's memory panel calls it).
+    It is deliberately a RETRACTION, not a DELETE:
+
+      * the Markdown source of truth is edited in place, so a rebuild cannot
+        resurrect the fact;
+      * the SQLite row keeps its history (`retracted_at`, `valid_to`), so "what
+        did I used to think?" still has an answer;
+      * the FTS entry is rewritten, not removed, for the same reason.
+
+    Returns False when the id does not exist or was already retracted.
+    """
+    row = conn.execute("SELECT * FROM facts WHERE id=?", (fact_id,)).fetchone()
+    if row is None or row["retracted_at"]:
+        return False
+    stamp = when or now_iso()[:10]
+    valid_to = row["valid_to"] or (_day(row["valid_from"]).isoformat()
+                                   if _day(row["valid_from"]) else None)
+    conn.execute(
+        "UPDATE facts SET retracted_at=?, valid_to=COALESCE(valid_to, ?) WHERE id=?",
+        (stamp, valid_to, fact_id),
+    )
+    try:                       # Markdown is truth; a failure here must not fake a delete
+        _strike_through_markdown(row, stamp, "")
+    except Exception as exc:
+        from ..util import swallowed
+
+        swallowed("friday/memory/facts.py:retract_fact.markdown", exc)
+    _index_retraction(conn, fact_id)
+    conn.commit()
+    return True
+
 
 def current_facts(conn: sqlite3.Connection, subject: str | None = None, limit: int = 200) -> list[sqlite3.Row]:
     q = "SELECT * FROM facts WHERE retracted_at IS NULL"

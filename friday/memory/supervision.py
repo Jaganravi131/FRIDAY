@@ -198,8 +198,8 @@ def export_training_set(conn: sqlite3.Connection, out_path) -> dict:
     is expected and survivable: the offsets remain, so the row is still usable for
     length statistics, and losing some spans to trace rotation is normal.
     """
-    from pathlib import Path
     import json
+    from pathlib import Path
 
     from ..memory.decay import policy_alpha
 

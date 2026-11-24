@@ -38,6 +38,19 @@ To install a regular (non-editable) package from this checkout, use
 `python -m pip install .`. This includes the memory/agent subpackages, SQLite schema,
 and the `friday needle` / `friday ablation` commands. Set `FRIDAY_ROOT` below before
 running commands outside the checkout; do not store personal data in site-packages.
+
+### The full HUD (optional, recommended)
+
+The install above is the stdlib-only core. The web interface adds FastAPI + uvicorn:
+
+```powershell
+pip install -e ".[serve]"
+friday serve                 # http://127.0.0.1:8642/ — token printed once
+```
+
+Without the extra, `friday serve` still runs: it falls back to the zero-dependency
+stdlib gateway. `friday serve --classic` forces that path explicitly. The token is
+created at `config/serve.token` (mode 0600) and is required on every data route.
 The benchmark baseline is a repository file, not user data: for an installed package,
 use `friday bench --gate --file C:\path\to\FRIDAY\BENCHMARKS.md` (replace that path).
 The blind-holdout runner (`friday holdout <file>`) also ships; it works from any cwd

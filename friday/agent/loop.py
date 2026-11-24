@@ -23,11 +23,11 @@ from ..config import MAX_AGENT_TURNS, TOOL_OUTPUT_CAP_TOKENS
 from ..ledger.compiler import CompiledContext, Gather, Ledger, log_telemetry
 from ..ledger.ladder import rung0_cap
 from ..llm.client import Client, NoRouteError, Response, ToolCall
+from ..memory import watcher as memory_watcher
 from ..memory.traces import Trace, TraceWriter
 from ..retrieval.pipeline import search
 from ..util import approx_tokens, new_id, now_iso
 from .policy import check, refusal
-from ..memory import watcher as memory_watcher
 from .routing import classify_turn, tools_for
 from .tools import ToolContext, build_registry
 
@@ -66,6 +66,10 @@ class State:
     #: Set when the loop hit max_turns without reaching a final answer. An
     #: exhaustion is an outcome, not a silent success-with-no-answer.
     exhausted: bool = False
+    #: Set when a caller asked the run to stop (the HUD's stop button, a cancelled
+    #: HTTP stream). It is an outcome like exhaustion: partial text is kept and
+    #: persisted, and the trace records it rather than pretending the turn finished.
+    cancelled: bool = False
     tool_log: list[dict] = field(default_factory=list)
     retrieved: list[dict] = field(default_factory=list)
     #: The tool-contract decision for this turn. Recorded so "it forgot" can be
@@ -89,6 +93,7 @@ class Agent:
         confirm: Callable[[str, dict], bool] | None = None,
         on_event: Callable[[str, dict], None] | None = None,
         watcher: memory_watcher.MemoryWatcher | None = None,
+        confirm_all: bool = False,
     ):
         self.conn = conn
         self.client = client
@@ -101,6 +106,18 @@ class Agent:
         #: agent must never take an irreversible action by default.
         self.confirm = confirm or (lambda name, args: False)
         self.on_event = on_event or (lambda kind, payload: None)
+        #: "always" approval mode: ask on every tool call, including ones policy
+        #: would allow silently. Policy DENIALS are still not overridable.
+        self.confirm_all = confirm_all
+        #: The loop calls `client.chat(..., on_token=...)` only when the client
+        #: actually declares it. Test doubles and third-party clients that predate
+        #: streaming keep working unchanged; nothing is inferred from TypeError.
+        try:
+            import inspect
+
+            self._streams = "on_token" in inspect.signature(self.client.chat).parameters
+        except (TypeError, ValueError):
+            self._streams = False
         #: ⭐ Law 7: hand-edits to memory/*.md are picked up on the next turn, with no
         #: restart. Default is the process-wide watcher so the CLI and a REPL share one
         #: mtime cache; pass `False` to disable (evals that must not touch the tree).
@@ -109,7 +126,9 @@ class Agent:
     # ── the loop ───────────────────────────────────────────────────────────────
 
     def run(self, user_turn: str, *, session_id: str = "", scope: str = "interactive",
-            senses: list[str] | None = None, max_turns: int | None = None) -> State:
+            senses: list[str] | None = None, max_turns: int | None = None,
+            on_token: Callable[[str], None] | None = None,
+            should_stop: Callable[[], bool] | None = None) -> State:
         st = State(
             session_id=session_id or self._open_session(scope),
             user_turn=user_turn,
@@ -199,6 +218,13 @@ class Agent:
                                         "summary": f"skipped: {st.intent.reason}"})
 
         while not st.done and st.turn_idx < st.max_turns:
+            if should_stop is not None and should_stop():
+                st.cancelled = True
+                st.final_text = (st.final_text or "").strip() or \
+                    "Stopped at your request. Nothing after this point was run."
+                st.done = True
+                break
+
             # 2. COMPILE — deterministic, <5ms, no model call
             g = Gather(
                 query=user_turn,
@@ -222,8 +248,12 @@ class Agent:
             msgs = self._messages(st)
             st.messages = msgs
             try:
+                chat_kwargs = {}
+                if on_token is not None and self._streams:
+                    chat_kwargs["on_token"] = on_token
                 resp = self.client.chat(msgs, tools=tools_for(st.intent,
-                                                                self.registry.schemas()))
+                                                                self.registry.schemas()),
+                                       **chat_kwargs)
             except RuntimeError as e:
                 if "cannot reach" in str(e):
                     st.final_text = (
@@ -329,6 +359,26 @@ class Agent:
         # that appear here, and an injection arriving through memory cannot add to it.
         authority = [t.get("content") or "" for t in st.transcript
                      if t.get("role") == "user"]
+
+        # The ATTEMPT is announced before policy runs, and every path below ends in
+        # exactly one `tool_result`. A refused call is still something the user asked
+        # for and should see on the timeline; silently dropping it made the HUD look
+        # like the model had ignored the request.
+        call_id = call.id or new_id("tc")
+
+        def announce() -> None:
+            self.on_event("tool_call", {"id": call_id, "name": call.name,
+                                        "arguments": call.arguments, "risk": None})
+
+        def finish(payload: dict, *, note: str | None = None) -> dict:
+            event = {"id": call_id, "name": call.name,
+                     "ok": not (payload.get("error") or payload.get("denied")
+                                or payload.get("cancelled"))}
+            if note:
+                event["note"] = note
+            self.on_event("tool_result", event)
+            return payload
+
         decision = check(self.conn, call.name, call.arguments, scope=st.scope,
                          authority_turns=authority)
         self.on_event("policy", {"tool": call.name, "verdict": decision.verdict,
@@ -336,14 +386,18 @@ class Agent:
 
         if decision.verdict == "denied":
             st.tool_failures += 1
-            return refusal(decision, call.name)
+            announce()
+            return finish(refusal(decision, call.name), note=decision.reason)
 
-        if decision.verdict == "confirmation_required":
-            if not self.confirm(call.name, call.arguments):
-                st.tool_failures += 1
-                return {"cancelled": True, "reason": "user declined",
-                        "tool": call.name,
-                        "note": "Don't retry. Ask what they'd prefer instead."}
+        needs_human = (decision.verdict == "confirmation_required"
+                       or (self.confirm_all and decision.verdict == "allowed"))
+        if needs_human and not self.confirm(call.name, call.arguments):
+            st.tool_failures += 1
+            announce()
+            return finish({"cancelled": True, "reason": "user declined",
+                           "tool": call.name,
+                           "note": "Don't retry. Ask what they'd prefer instead."},
+                          note="user declined")
 
         ctx = ToolContext(
             conn=self.conn, scope=st.scope, session_id=st.session_id,
@@ -353,10 +407,12 @@ class Agent:
             recent_turns=[t["content"] for t in st.transcript[-4:]],
             traces=self.traces,
         )
+        announce()          # only now is the call actually going to run
         out = self.registry.invoke(call.name, call.arguments, ctx)
         if isinstance(out, dict) and out.get("error"):
             st.tool_failures += 1
-        return out if isinstance(out, dict) else {"result": out}
+        payload = out if isinstance(out, dict) else {"result": out}
+        return finish(payload)
 
     # ── prompt assembly ────────────────────────────────────────────────────────
 
@@ -415,7 +471,8 @@ class Agent:
                          "outcome": _tool_outcome(t),
                          "ok": _tool_outcome(t) == "succeeded"}
                         for t in st.tool_log],
-            outcome=("budget_exhausted" if st.exhausted else "succeeded"),
+            outcome=("cancelled" if st.cancelled else
+                     "budget_exhausted" if st.exhausted else "succeeded"),
             tokens_in=approx_tokens(st.user_turn), tokens_out=approx_tokens(st.final_text),
             cache_hit=bool(c.cache_hit) if c else None,
             ledger_hash=c.ledger_hash if c else None,

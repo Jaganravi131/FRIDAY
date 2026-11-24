@@ -38,8 +38,6 @@ a wrong fact came from a bad extraction or from your own typo three weeks ago.
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import hashlib
 import sqlite3
 import threading
@@ -49,6 +47,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 from .. import paths
+from ..util import swallowed
 from . import compiler
 
 

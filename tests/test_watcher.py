@@ -26,7 +26,6 @@ from friday.memory.compiler import compile_all
 from friday.memory.facts import Fact, assert_fact
 from friday.store import db
 
-
 HOUSING = """---
 domain: housing
 ---
@@ -262,6 +261,7 @@ def test_audit_never_breaks_a_turn(store, monkeypatch):
         raise sqlite3.OperationalError("database is locked")
 
     import sqlite3
+
     from friday.agent import policy
     monkeypatch.setattr(policy, "log", boom)
 

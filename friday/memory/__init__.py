@@ -19,11 +19,11 @@ from .supervision import (
     RetractionPair,
     SpanLabel,
     export_training_set,
+    pair_counts,
     ready_for_phase_3_5,
     record_pair,
     record_span,
     span_counts,
-    pair_counts,
     supervision_report,
 )
 from .traces import Trace, TraceWriter, behavioural_signals

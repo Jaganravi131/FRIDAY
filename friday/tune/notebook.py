@@ -61,7 +61,7 @@ print(f"{{len(rows)}} training examples")
 assert len(rows) >= 50, "too few rows to teach anything — collect more memory first"
 print(json.dumps(rows[0], indent=2)[:600])"""))
 
-    cells.append(_md(f"## 3 · Load the base model (4-bit)"))
+    cells.append(_md("## 3 · Load the base model (4-bit)"))
     cells.append(_code(f"""import torch
 from unsloth import FastLanguageModel
 
@@ -115,7 +115,7 @@ out = model.generate(**tok(text, return_tensors="pt").to("cuda"),
                      max_new_tokens=200, temperature=0.3)
 print(tok.decode(out[0], skip_special_tokens=True)[-800:])"""))
 
-    cells.append(_md(f"## 6 · Merge + convert to GGUF (Q4_K_M) + download"))
+    cells.append(_md("## 6 · Merge + convert to GGUF (Q4_K_M) + download"))
     cells.append(_code(f"""# save_pretrained_gguf runs the llama.cpp conversion inside unsloth's bundled
 # toolchain; Q4_K_M is the per-layer mix that gives the best size/quality at ~4-5 GB.
 model.save_pretrained_gguf("{out_name}", tok, quantization_method="q4_k_m")

@@ -14,12 +14,10 @@ so this tool is the only exact memory FRIDAY has (Law 2b).
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import os
 import sqlite3
-from dataclasses import dataclass
 import urllib.parse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
@@ -28,7 +26,7 @@ from ..config import RETRIEVAL_K_SHIP
 from ..memory.facts import Fact, assert_fact, domain_for
 from ..memory.traces import TraceWriter
 from ..retrieval.pipeline import search
-from ..util import approx_tokens, new_id, now_iso
+from ..util import approx_tokens, new_id, now_iso, swallowed
 
 
 @dataclass
@@ -61,6 +59,10 @@ class ToolRegistry:
 
     def schemas(self) -> list[dict]:
         return [t.schema() for t in self._tools.values()]
+
+    def specs(self) -> list["ToolSpec"]:
+        """The registered tools, for listings (the HUD's toolbox panel)."""
+        return list(self._tools.values())
 
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
@@ -527,6 +529,21 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
         "required": ["name"],
     }, read_artifact))
     if phase >= 1:
+        # Deterministic helpers from the HUD line. `math` exists because a small
+        # model must not be trusted with arithmetic; `clock` because the injected
+        # reading only appears when the intent classifier says the turn is a clock
+        # question, and mid-reasoning is not that turn.
+        from .extra_tools import CLOCK_DOC, MATH_DOC, clock, math_tool
+
+        r.register(ToolSpec("math", MATH_DOC, {
+            "type": "object",
+            "properties": {"expression": {"type": "string",
+                                          "description": "arithmetic, e.g. '(17*42)+9'"}},
+            "required": ["expression"],
+        }, math_tool))
+        r.register(ToolSpec("clock", CLOCK_DOC,
+                            {"type": "object", "properties": {}}, clock))
+
         # Phase 1 = the web, READ-ONLY. Deliberately no browser, no credentials, no form
         # submission: doc 16 §2.1 records why, and the reason is that execution
         # sandboxing is still an unbuilt gap in SECURITY.md §5. Reaching is safe; acting
@@ -546,12 +563,42 @@ def build_registry(*, phase: int | None = None) -> ToolRegistry:
             "required": ["topic"],
         }, wiki))
     if phase >= 2:
+        from .extra_tools import FILE_EDIT_DOC, FILE_GREP_DOC, file_edit, file_grep
+
+        r.register(ToolSpec("file_edit", FILE_EDIT_DOC, {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "relative path in workspace"},
+                "old": {"type": "string", "description": "exact text to replace (must be unique)"},
+                "new": {"type": "string", "description": "replacement text"},
+            },
+            "required": ["path", "old", "new"],
+        }, file_edit))
+        r.register(ToolSpec("file_grep", FILE_GREP_DOC, {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "regular expression"},
+                "path": {"type": "string", "description": "relative folder, '.' default"},
+                "max_results": {"type": "integer", "description": "1-60, default 60"},
+            },
+            "required": ["pattern"],
+        }, file_grep))
+
+    if phase >= 2:
         # Phase 2 = the agentic workspace: one confined folder + a curated shell.
         # Registration only makes them OFFERABLE. policy.check() still gates every
         # call on the workspace.files / workspace.exec senses, and ws_shell is flat
         # denied in unattended scope — offering a tool is never granting it.
-        from .workspace import (WS_LIST_DOC, WS_READ_DOC, WS_SHELL_DOC,
-                                WS_WRITE_DOC, ws_list, ws_read, ws_shell, ws_write)
+        from .workspace import (
+            WS_LIST_DOC,
+            WS_READ_DOC,
+            WS_SHELL_DOC,
+            WS_WRITE_DOC,
+            ws_list,
+            ws_read,
+            ws_shell,
+            ws_write,
+        )
         r.register(ToolSpec("ws_list", WS_LIST_DOC, {
             "type": "object",
             "properties": {

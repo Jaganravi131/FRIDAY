@@ -1,0 +1,41 @@
+# `docker compose up` — the HUD on http://localhost:8642.
+#
+# The token is created inside the container on first boot at
+# /data/config/serve.token (0600). Read it with:
+#
+#   docker compose exec friday cat /data/config/serve.token
+#
+# A model server on the host is reachable as `host.docker.internal` on Docker
+# Desktop and, with the extra_hosts entry below, on Linux too.
+
+services:
+  friday:
+    build: .
+    image: friday:local
+    ports:
+      - "8642:8642"
+    volumes:
+      - friday-data:/data
+    environment:
+      # Point this at any OpenAI-compatible server. With no server, FRIDAY runs
+      # its simulation core — the HUD, memory and tools all work.
+      FRIDAY_LLM_URL: ${FRIDAY_LLM_URL:-http://host.docker.internal:8080/v1}
+      FRIDAY_LLM_MODEL: ${FRIDAY_LLM_MODEL:-friday-local}
+      # Set FRIDAY_LLM_PROVIDER=anthropic + ANTHROPIC_API_KEY to use Anthropic.
+      FRIDAY_LLM_PROVIDER: ${FRIDAY_LLM_PROVIDER:-http}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys,urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8642/api/health', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  friday-data:

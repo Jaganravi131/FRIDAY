@@ -40,14 +40,14 @@ from .losses import (
     l_salience,
     total_loss,
 )
-from .model import RSCConfig, RetentionStateCompiler, render_state_block
+from .model import RetentionStateCompiler, RSCConfig, render_state_block
 from .operators import (
     ABLATION_LADDER,
     OPERATOR_NAMES,
     EraseThenDelta,
-    Gates,
     GatedDeltaNet,
     GatedDeltaNet2,
+    Gates,
     KimiDelta,
     Operator,
     RetNet,

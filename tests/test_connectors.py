@@ -14,7 +14,7 @@ import pytest
 from friday import paths
 from friday.agent import policy
 from friday.agent.tools import ToolContext
-from friday.connectors import known, get
+from friday.connectors import get, known
 from friday.store import db
 
 
@@ -136,8 +136,8 @@ def test_fetch_is_readonly_at_the_protocol_level(monkeypatch, gmail_cfg):
 
 
 def test_email_read_tool_summarises_and_never_trusts(monkeypatch, gmail_cfg, root):
-    from friday.connectors import gmail as g
     from friday.agent.connector_tools import email_read
+    from friday.connectors import gmail as g
     monkeypatch.setattr(g.imaplib, "IMAP4_SSL", _FakeIMAP)
 
     class Bodied(_FakeIMAP):

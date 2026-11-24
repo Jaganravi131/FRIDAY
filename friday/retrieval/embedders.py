@@ -20,14 +20,14 @@ because FTS5 is doing nearly all the work.
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import hashlib
 import json
 import math
 import re
 import urllib.request
 from typing import Protocol
+
+from ..util import swallowed
 
 
 class Embedder(Protocol):

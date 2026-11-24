@@ -34,7 +34,6 @@ from friday.security.injection import InjectionReport
 from friday.security.trust import PROTECTED_TAGS, NeutraliseReport, neutralize_row
 from friday.store import db
 
-
 # ── fixtures ───────────────────────────────────────────────────────────────────
 
 @pytest.fixture

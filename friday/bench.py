@@ -45,8 +45,6 @@ of wall clock, this needs neither and can therefore run on every commit.
 
 from __future__ import annotations
 
-from .util import swallowed
-
 import io
 import json
 import os
@@ -58,6 +56,8 @@ from contextlib import contextmanager, redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+
+from .util import swallowed
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 

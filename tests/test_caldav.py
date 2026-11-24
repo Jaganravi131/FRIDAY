@@ -112,8 +112,9 @@ def test_write_verbs_never_leave_the_process(cal_cfg):
     """The read-only contract is enforced BEFORE the wire: even if a future
     bug asks for one, PUT/DELETE/PROPPATCH must raise inside _http, not get
     a 405 from the server."""
-    from friday.connectors import caldav
     import urllib.parse
+
+    from friday.connectors import caldav
     parts = urllib.parse.urlsplit("https://caldav.icloud.com/12345/calendars/home/")
     cfg = {"url": parts.geturl(), "user": "me@icloud.com", "app_password": "x"}
     for verb in ("PUT", "DELETE", "PROPPATCH", "MKCALENDAR", "LOCK"):
@@ -154,8 +155,8 @@ def test_fetch_uses_only_readonly_verbs(monkeypatch, cal_cfg):
 
 
 def test_calendar_read_tool_summarises_and_never_trusts(monkeypatch, cal_cfg, root):
-    from friday.connectors import caldav
     from friday.agent.connector_tools import calendar_read
+    from friday.connectors import caldav
     monkeypatch.setattr(caldav, "_http", _Wire.http)
 
     conn, ctx = _ctx(root)

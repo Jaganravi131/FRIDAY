@@ -25,7 +25,11 @@ def check(dist: Path) -> None:
     wheel = wheels[0]
     with ZipFile(wheel) as archive:
         required = {"friday/agent/loop.py", "friday/memory/compiler.py",
-                    "friday/store/db.py", "friday/store/schema.sql"}
+                    "friday/store/db.py", "friday/store/schema.sql",
+                    "friday/web/app.py", "friday/web/adapters.py",
+                    "friday/web/static/index.html", "friday/web/static/app.js",
+                    "friday/web/static/style.css",
+                    "friday/llm/anthropic.py", "friday/agent/extra_tools.py"}
         missing = required - set(archive.namelist())
         if missing:
             raise RuntimeError(f"wheel is missing runtime files: {sorted(missing)}")

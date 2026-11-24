@@ -17,13 +17,11 @@ Three properties carry the design:
 """
 from __future__ import annotations
 
-
 from friday.config import LEDGER_BUDGET_TOKENS, LEDGER_RESERVE_TOKENS, LEDGER_SLOTS
 from friday.ledger import ladder
 from friday.ledger.compiler import CompiledContext, Gather, Ledger, render
 from friday.ledger.slots import SLOT_ORDER, STABLE_SLOTS, Slot, SlotSet
 from friday.util import approx_tokens
-
 
 # ── slots ─────────────────────────────────────────────────────────────────────
 

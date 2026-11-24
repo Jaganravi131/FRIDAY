@@ -20,25 +20,24 @@ Operator API (used throughout):
 from __future__ import annotations
 
 import math
+from pathlib import Path
 
 import pytest
-from pathlib import Path
 
 from friday.rsc.ablation import _gates
 from friday.rsc.operators import (
     ABLATION_LADDER,
     OPERATOR_NAMES,
     EraseThenDelta,
-    Gates,
     GatedDeltaNet,
     GatedDeltaNet2,
+    Gates,
     KimiDelta,
     RetNet,
     State,
     build,
     l2_normalise,
 )
-
 
 # ── state ──────────────────────────────────────────────────────────────────────
 
@@ -422,7 +421,7 @@ def test_state_is_fixed_size_regardless_of_sequence_length():
 # ── the model ──────────────────────────────────────────────────────────────────
 
 def test_compile_returns_fixed_state_slots():
-    from friday.rsc.model import RSCConfig, RetentionStateCompiler
+    from friday.rsc.model import RetentionStateCompiler, RSCConfig
 
     cfg = RSCConfig(d_model=16, n_heads=2, d_k=8, d_v=8, n_layers=2,
                     swa_window=4, state_slots=3, operator="gdn2")
@@ -439,7 +438,7 @@ def test_compile_returns_fixed_state_slots():
 
 
 def test_compile_of_an_empty_sequence_is_safe():
-    from friday.rsc.model import RSCConfig, RetentionStateCompiler
+    from friday.rsc.model import RetentionStateCompiler, RSCConfig
 
     cfg = RSCConfig(d_model=8, n_heads=1, d_k=4, d_v=4, n_layers=1, state_slots=2)
     out = RetentionStateCompiler(cfg).compile([])
@@ -472,7 +471,7 @@ def test_gate_branches_are_separate_projections():
     """Separate branches are what make the gates separately SUPERVISABLE — the entire
     basis of gate_supervision.py. If decay, erase and write shared a projection, one
     label set would drag the other two."""
-    from friday.rsc.model import RSCConfig, RetentionStateCompiler
+    from friday.rsc.model import RetentionStateCompiler, RSCConfig
 
     cfg = RSCConfig(d_model=16, n_heads=2, d_k=8, d_v=8, n_layers=1, state_slots=2,
                     operator="gdn2")
@@ -885,7 +884,7 @@ def test_probe_keys_are_identical_across_processes():
         outs.append(r.stdout.strip())
 
     assert len(set(outs)) == 1, \
-        f"probe keys must not depend on the process hash seed:\n" + "\n".join(outs)
+        "probe keys must not depend on the process hash seed:\n" + "\n".join(outs)
 
 
 def test_associative_probe_is_reproducible_run_to_run():

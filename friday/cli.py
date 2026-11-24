@@ -51,7 +51,8 @@ import sqlite3
 from pathlib import Path
 
 from . import paths
-from .util import now_iso
+from .agent.loop import Agent
+from .agent.tools import build_registry
 from .config import LEDGER_BUDGET_TOKENS, RETRIEVAL_K_SHIP, canonical_predicate
 from .ledger.compiler import Ledger
 from .llm.client import get_client
@@ -64,9 +65,7 @@ from .retrieval.embedders import get_embedder
 from .retrieval.pipeline import search
 from .retrieval.rerankers import get_reranker
 from .store import db as store_db
-from .agent.loop import Agent
-from .agent.tools import build_registry
-
+from .util import now_iso
 
 # ── helpers ────────────────────────────────────────────────────────────────────
 
@@ -918,10 +917,27 @@ def cmd_review(args) -> int:
 def cmd_serve(args) -> int:
     """`friday serve` — the gateway. Exit test #12, and the Presence Fabric seed.
 
+    Defaults to the full HUD (FastAPI + SSE) when the `serve` extra is installed,
+    and falls back to the stdlib gateway when it is not. `--classic` forces the
+    stdlib gateway, which is what you want on a machine where `pip install
+    friday[serve]` was never run — or when you specifically want the zero-dependency
+    path that the gateway tests pin.
+
     Binds loopback unless you ask otherwise; `--host tailscale` is the intended way to
     reach FRIDAY from your phone, because the tunnel is encrypted and the port never
     appears on the internet.
     """
+    if not args.classic:
+        try:
+            from .web.app import run as hud_run
+        except ImportError as exc:
+            _say("serve: the web stack is not installed "
+                 f"({type(exc).__name__}) — using the stdlib gateway. "
+                 "`pip install -e \".[serve]\"` for the full HUD.")
+        else:
+            return hud_run(host=args.host, port=args.port,
+                           token=args.token, quiet=args.quiet)
+
     from .serve import serve
 
     return serve(host=args.host, port=args.port, token=args.token, quiet=args.quiet)
@@ -1066,6 +1082,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--token", default=None,
                    help="bearer token; default reads/creates config/serve.token (0600)")
     p.add_argument("--quiet", action="store_true")
+    p.add_argument("--classic", action="store_true",
+                   help="use the stdlib gateway instead of the FastAPI HUD "
+                        "(zero extra dependencies; the gateway tests pin it)")
 
     p = sub.add_parser("connectors", help="⭐ external accounts — status + config help")
     p.set_defaults(fn=cmd_connectors); common(p)
@@ -1092,7 +1111,7 @@ def cmd_connectors(args) -> int:
     secret fields themselves — a status screen that echoes your app password is a
     screenshot away from a leak.
     """
-    from .connectors import SECRET_FIELDS, known, get
+    from .connectors import SECRET_FIELDS, get, known
 
     ids = known()
     if not ids:

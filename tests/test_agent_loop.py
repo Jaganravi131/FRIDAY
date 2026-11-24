@@ -26,7 +26,6 @@ from friday.agent.tools import ToolContext, ToolRegistry, ToolSpec, build_regist
 from friday.llm.client import MockClient, Response, ToolCall
 from friday.memory.traces import TraceWriter
 
-
 # ── helpers ────────────────────────────────────────────────────────────────────
 
 

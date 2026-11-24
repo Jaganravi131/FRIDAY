@@ -13,9 +13,8 @@ rather than letting it fall through to a silent hallucination.
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import json
+import os
 import re
 import urllib.error
 import urllib.request
@@ -23,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_TIMEOUT_S
+from ..util import swallowed
 
 
 class NoRouteError(RuntimeError):
@@ -108,7 +108,15 @@ class OpenAICompatibleClient:
         except Exception:
             return False
 
-    def chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768) -> Response:
+    def chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768,
+             on_token=None) -> Response:
+        """One assistant turn.
+
+        `on_token` switches the request to SSE and forwards text deltas as they
+        arrive. It is optional on purpose: the CLI and every eval caller keep the
+        non-streaming path, and a server that cannot stream still works (the loop
+        only passes the callback when the client declares it).
+        """
         import time
 
         payload: dict[str, Any] = {
@@ -116,7 +124,7 @@ class OpenAICompatibleClient:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": max_tokens,
-            "stream": False,
+            "stream": on_token is not None,
         }
         # Portable fallback for servers without the tool message role: fold tool
         # results into labelled user-role envelopes. The LABEL is what keeps the
@@ -146,6 +154,8 @@ class OpenAICompatibleClient:
         )
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
+                if on_token is not None:
+                    return self._read_stream(r, t0, tools, use_native, on_token)
                 data = json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             body = e.read().decode(errors="replace")[:400]
@@ -153,14 +163,14 @@ class OpenAICompatibleClient:
             if tools and e.code == 400 and self.native_tools:
                 self.native_tools = False
                 return self.chat(messages, tools=tools, temperature=temperature,
-                                 max_tokens=max_tokens)
+                                 max_tokens=max_tokens, on_token=on_token)
             # ...or it rejects the `tool` message role itself. Same recovery
             # pattern: degrade once to the portable envelope, sticky thereafter.
             if e.code == 400 and self.native_tool_messages \
                     and any(m.get("role") == "tool" for m in messages):
                 self.native_tool_messages = False
                 return self.chat(messages, tools=tools, temperature=temperature,
-                                 max_tokens=max_tokens)
+                                 max_tokens=max_tokens, on_token=on_token)
             raise RuntimeError(f"LLM HTTP {e.code}: {body}") from e
         except urllib.error.URLError as e:
             raise RuntimeError(
@@ -184,6 +194,74 @@ class OpenAICompatibleClient:
             completion_tokens=usage.get("completion_tokens"),
             total_ms=total_ms,
             raw=data,
+        )
+
+
+    def _read_stream(self, response, t0: float, tools, use_native: bool,
+                     on_token) -> Response:
+        """Accumulate OpenAI SSE chunks into the same `Response` the JSON path returns.
+
+        Tool calls arrive as deltas too: `{index, id, function: {name, arguments}}`,
+        where `arguments` is a JSON string split at arbitrary byte boundaries. They
+        are accumulated by index and parsed once at the end — parsing per chunk is
+        the classic way to get half a JSON object and silently drop the call.
+        """
+        import time
+
+        text_parts: list[str] = []
+        acc: dict[int, dict[str, str]] = {}
+        usage: dict[str, Any] = {}
+        model = self.model
+        ttft_ms: int | None = None
+        for raw in response:
+            line = raw.decode("utf-8", errors="replace").strip()
+            if not line.startswith("data:"):
+                continue
+            payload = line[5:].strip()
+            if payload == "[DONE]":
+                break
+            try:
+                obj = json.loads(payload)
+            except json.JSONDecodeError:
+                continue                    # a keepalive or a vendor comment
+            if obj.get("model"):
+                model = obj["model"]
+            if obj.get("usage"):
+                usage = obj["usage"]
+            for choice in obj.get("choices") or []:
+                delta = choice.get("delta") or {}
+                piece = delta.get("content")
+                if piece:
+                    if ttft_ms is None:
+                        ttft_ms = int((time.perf_counter() - t0) * 1000)
+                    text_parts.append(piece)
+                    on_token(piece)
+                for tc in delta.get("tool_calls") or []:
+                    slot = acc.setdefault(int(tc.get("index", 0)),
+                                          {"id": "", "name": "", "arguments": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        slot["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        slot["arguments"] += fn["arguments"]
+        text = "".join(text_parts)
+        calls = [_parse_call({"id": slot["id"],
+                              "function": {"name": slot["name"],
+                                           "arguments": slot["arguments"]}})
+                 for _, slot in sorted(acc.items()) if slot["name"]]
+        if not calls and not use_native and tools:
+            text, calls = _parse_prompt_tools(text)
+        return Response(
+            text=text,
+            tool_calls=[c for c in calls if c],
+            model=model,
+            prompt_tokens=usage.get("prompt_tokens"),
+            completion_tokens=usage.get("completion_tokens"),
+            ttft_ms=ttft_ms,
+            total_ms=int((time.perf_counter() - t0) * 1000),
+            raw={"streamed": True},
         )
 
 
@@ -285,7 +363,24 @@ class MockClient:
         self.latency_ms = latency_ms
         self.calls: list[list[dict]] = []
 
-    def chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768) -> Response:
+    def chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768,
+             on_token=None) -> Response:
+        """Run the deterministic reply, then (optionally) emit it as word chunks.
+
+        The zero-key simulation must exercise the *streaming* path too, otherwise
+        the HUD's most important code path is only tested against a real model the
+        user may not have.
+        """
+        resp = self._chat(messages, tools=tools, temperature=temperature,
+                          max_tokens=max_tokens)
+        if on_token is not None and resp.text:
+            import re
+
+            for piece in re.findall(r"\S+\s*", resp.text):
+                on_token(piece)
+        return resp
+
+    def _chat(self, messages, *, tools=None, temperature=0.2, max_tokens=768) -> Response:
         import time
 
         t0 = time.perf_counter()
@@ -582,7 +677,36 @@ def _answer(query: str, facts: list[tuple[str, str]], now: str | None = None) ->
 # ── selection ──────────────────────────────────────────────────────────────────
 
 def get_client(prefer: str = "auto", **kw: Any) -> Client:
-    """Real server if reachable, else the mock. Never raises."""
+    """Pick a backend. Never raises.
+
+    Order of preference:
+
+      1. `FRIDAY_LLM_PROVIDER=anthropic` (or an explicit `prefer="anthropic"`)
+         **and** `ANTHROPIC_API_KEY` present → `AnthropicClient`.
+      2. An OpenAI-compatible server that answers `/health` → real local client.
+      3. `MockClient` — the deterministic simulation core, which is a complete
+         system minus generation.
+
+    A configured-but-keyless Anthropic provider falls back to the mock with one
+    line on stderr rather than returning a client that will fail on first use.
+    """
+    prefer = os.environ.get("FRIDAY_LLM_PROVIDER", prefer) or "auto"
+    if prefer in ("anthropic", "claude"):
+        from .anthropic import AnthropicClient
+
+        client = AnthropicClient(
+            api_key=kw.get("api_key") or os.environ.get("ANTHROPIC_API_KEY", ""),
+            model=kw.get("model") or os.environ.get(
+                "FRIDAY_ANTHROPIC_MODEL", "claude-sonnet-4-5"),
+        )
+        if client.alive():
+            return client
+        import sys
+
+        print("[llm] provider=anthropic but ANTHROPIC_API_KEY is unset; "
+              "using the simulation core. Set the key or FRIDAY_LLM_PROVIDER=http.",
+              file=sys.stderr)
+        return MockClient()
     if prefer in ("auto", "http"):
         try:
             c = OpenAICompatibleClient(**kw)

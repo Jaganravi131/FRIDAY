@@ -22,7 +22,6 @@ from friday.agent.routing import KINDS, TurnIntent, classify_turn, tools_for
 from friday.agent.tools import build_registry
 from friday.memory import provenance
 
-
 # ── the router: must retrieve ─────────────────────────────────────────────────
 
 MUST_RETRIEVE = [
@@ -320,11 +319,11 @@ def test_as_dicts_tolerates_a_partial_row():
 # ── acting on the classification (not just making it) ──────────────────────────
 
 def _ask(root, text):
-    from friday.store import db
     from friday.agent.loop import Agent
     from friday.llm import get_client
     from friday.retrieval.embedders import get_embedder
     from friday.retrieval.rerankers import get_reranker
+    from friday.store import db
 
     with db.connect(root / "friday.db") as conn:
         ag = Agent(conn, client=get_client(prefer="mock"),

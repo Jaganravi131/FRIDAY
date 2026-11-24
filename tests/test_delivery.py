@@ -32,7 +32,6 @@ import pytest
 
 from friday import doctor, paths, serve
 
-
 # ── doctor ─────────────────────────────────────────────────────────────────────
 
 def _seed(root: Path) -> None:

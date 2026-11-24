@@ -20,14 +20,13 @@ Scope decisions that are LOAD-BEARING, not incidental:
 """
 from __future__ import annotations
 
-from ..util import swallowed
-
 import email
 import email.header
 import email.utils
 import imaplib
 from email.message import Message
 
+from ..util import swallowed
 from . import Connector, Item, config_help, load_config, register
 
 IMAP_HOST_DEFAULT = "imap.gmail.com"

@@ -390,9 +390,9 @@ def test_audit_says_so_when_empty(cli):
 
 def test_audit_shows_the_enforcement_trail(cli, isolated_paths):
     """The audit trail is what makes tiered consent auditable after the fact."""
-    from friday.store import db
-    from friday.agent.policy import check, grant
     from friday import paths
+    from friday.agent.policy import check, grant
+    from friday.store import db
 
     conn = db.connect(paths.DB_PATH)
     check(conn, "mic_listen", {})                 # denied, ungranted
@@ -406,9 +406,9 @@ def test_audit_shows_the_enforcement_trail(cli, isolated_paths):
 
 
 def test_audit_limit_is_respected(cli):
-    from friday.store import db
-    from friday.agent.policy import log
     from friday import paths
+    from friday.agent.policy import log
+    from friday.store import db
 
     conn = db.connect(paths.DB_PATH)
     for i in range(10):

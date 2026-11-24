@@ -30,7 +30,6 @@ import pytest
 from friday.agent.tools import ToolContext, build_registry, contain_untrusted
 from friday.security import netguard
 
-
 # ── a local fixture server ─────────────────────────────────────────────────────
 
 NORMAL = ("<html><head><style>body{}</style><script>var secret=1;</script></head>"

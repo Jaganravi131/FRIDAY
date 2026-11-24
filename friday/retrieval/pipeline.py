@@ -21,23 +21,21 @@ primitive, and this file is its implementation.
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import re
 import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Sequence
 
 from ..config import (
-    aliases_for,
     RETRIEVAL_GRAPH_HOPS,
     RETRIEVAL_K_SHIP,
     RETRIEVAL_K_WIDE,
     RETRIEVAL_SCORE_FLOOR,
+    aliases_for,
 )
 from ..memory.decay import decay_row
 from ..store import db
-from ..util import jaccard, now_iso, partial_date
+from ..util import jaccard, now_iso, partial_date, swallowed
 from .concepts import expand_terms
 from .embedders import Embedder, get_embedder
 from .rerankers import Reranker, get_reranker
@@ -159,7 +157,7 @@ def rewrite_query(query: str, recent_turns: Sequence[str] = ()) -> str:
 #: which is what the LexicalReranker scores against. Recall finding a fact and the
 #: reranker discarding it is the failure mode the reranker's own docstring warns about,
 #: and two stopword lists is how you get it by accident.
-from ..store.db import CONTENT_STOPWORDS as _STOP
+from ..store.db import CONTENT_STOPWORDS as _STOP  # noqa: E402 — see the note above
 
 
 def _cell(row: Any, key: str, default: Any = None) -> Any:

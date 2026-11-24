@@ -194,8 +194,8 @@ def _conn():
     """sqlite3 connections cannot cross threads, so each thread keeps its own."""
     c = getattr(_local, "conn", None)
     if c is None:
-        from .store import db
         from . import paths
+        from .store import db
 
         c = db.connect(paths.DB_PATH)
         _local.conn = c

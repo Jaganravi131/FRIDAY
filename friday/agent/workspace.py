@@ -29,16 +29,15 @@ policy.check() — the tiered consent the whole trust model rests on.
 """
 from __future__ import annotations
 
-from ..util import swallowed
-
 import json
 import shlex
 import subprocess
 from pathlib import Path
 
 from .. import paths
-from ..util import approx_tokens, cap_tokens
+from ..util import approx_tokens, cap_tokens, swallowed
 from .policy import log as _audit
+
 
 def _config() -> dict:
     """config/connectors.json — shared with the connectors layer (doc 18). Missing

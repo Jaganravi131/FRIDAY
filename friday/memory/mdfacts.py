@@ -138,7 +138,7 @@ _PRED_OBJ = re.compile(r"^(?P<pred>[\w][\w\-\. ]*?)\s*:\s*(?P<obj>.+)$", re.DOTA
 
 _META_ID = re.compile(r"\b(f_[\w\-]+)\b")
 _META_KIND = re.compile(
-    rf"\b(user_edit|stated|imported|observed|inferred)\b", re.IGNORECASE
+    r"\b(user_edit|stated|imported|observed|inferred)\b", re.IGNORECASE
 )
 _META_CONF = re.compile(r"conf(?:idence)?\s*[:=]?\s*([01](?:\.\d+)?)", re.IGNORECASE)
 _META_RETRACTED = re.compile(r"retracted(?:\s*([\d]{4}-[\d]{2}(?:-[\d]{2})?))?", re.IGNORECASE)

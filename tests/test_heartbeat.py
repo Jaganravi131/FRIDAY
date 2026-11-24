@@ -12,7 +12,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 
-
 from friday.agent.heartbeat import HEARTBEAT_OK, Tick, beat
 from friday.memory.facts import Fact, assert_fact
 

@@ -23,9 +23,9 @@ address is still polluting reads. GDN-2 cannot clear it; EDA can.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
-import hashlib
 import random
 from dataclasses import dataclass, field
 from typing import Any, Sequence
@@ -38,7 +38,6 @@ from .operators import (
     build,
     l2_normalise,
 )
-
 
 # ── probes ─────────────────────────────────────────────────────────────────────
 

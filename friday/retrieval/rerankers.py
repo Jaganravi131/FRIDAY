@@ -14,13 +14,11 @@ when it's active — so `Reranker.recommended_floor` exists and the pipeline rea
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import re
 from typing import Protocol, Sequence
 
 from ..store.db import _STOPWORDS
-from ..util import stem
+from ..util import stem, swallowed
 from .concepts import concept_of_stem, strip_possessives
 
 #: ⚠️ `[^\W_]+`, NOT `\w+`. In Python `\w` includes the underscore, so the naive
@@ -73,8 +71,9 @@ class OnnxReranker:
     """
 
     def __init__(self, model_dir: str = "models/reranker", max_len: int = 512):
-        import onnxruntime as ort  # lazy: optional dep
         from pathlib import Path
+
+        import onnxruntime as ort  # lazy: optional dep
 
         onnx_path = Path(model_dir) / "onnx" / "model.onnx"
         if not onnx_path.exists():

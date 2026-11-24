@@ -9,13 +9,12 @@ not the index.
 
 from __future__ import annotations
 
-from ..util import swallowed
-
 import math
 import sqlite3
 from pathlib import Path
 
 from .. import paths
+from ..util import swallowed
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 

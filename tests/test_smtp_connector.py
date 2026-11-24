@@ -282,6 +282,7 @@ def test_scope_gate_fails_closed_when_scope_attr_absent(smtp_cfg, fake_smtp, roo
     """A foreign ctx object that carries no scope attribute must NOT be read as
     'interactive'. A write gate that fails open is a bug report, not a gate."""
     from types import SimpleNamespace
+
     from friday.agent.connector_tools import email_send
     conn = db.connect(root / "artifacts" / "friday.db")
     try:
@@ -298,6 +299,7 @@ def test_confirm_prompt_shows_the_COMPLETE_payload(root, monkeypatch, capsys):
     chars (a long email, a file_write tail) was confirmed BLIND, which is
     consent without content. Regression-pin: the prompt must carry it all."""
     from types import SimpleNamespace
+
     from friday import cli
     conn, _ctx_ = _ctx(root)
     try:

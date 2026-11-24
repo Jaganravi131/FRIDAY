@@ -25,8 +25,6 @@ Design rules:
 
 from __future__ import annotations
 
-from .util import swallowed
-
 import json
 import os
 import platform
@@ -35,6 +33,8 @@ import sqlite3
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+from .util import swallowed
 
 MIN_PYTHON = (3, 11)
 MIN_SQLITE = (3, 35)          # RETURNING, and the FTS5 behaviour the schema assumes

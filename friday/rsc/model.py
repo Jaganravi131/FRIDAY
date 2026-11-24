@@ -45,7 +45,6 @@ from .operators import (
     sigmoid,
 )
 
-
 # ── a tiny dense layer, because there is no torch here ─────────────────────────
 
 @dataclass

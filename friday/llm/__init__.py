@@ -25,6 +25,7 @@ a personal agent cannot be allowed to have.
 
 from __future__ import annotations
 
+from .anthropic import AnthropicClient
 from .client import (
     Client,
     MockClient,
@@ -36,6 +37,7 @@ from .client import (
 )
 
 __all__ = [
+    "AnthropicClient",
     "Client",
     "MockClient",
     "NoRouteError",
