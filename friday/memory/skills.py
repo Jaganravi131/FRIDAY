@@ -292,21 +292,35 @@ def skills_index(conn: sqlite3.Connection | None, *, budget_tokens: int = 192) -
 # ── dreaming: activation telemetry + the promotion gate (T-024) ────────────────
 
 
-def record_activations(conn: sqlite3.Connection, names: list[str]) -> int:
+def _ensure_activation_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS skill_activations ("
+        "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+        "skill_name TEXT NOT NULL, "
+        "confidence REAL NOT NULL DEFAULT 1.0, "
+        "failed INTEGER NOT NULL DEFAULT 0, "
+        "recorded_at TEXT NOT NULL)"
+    )
+
+
+def record_activations(conn: sqlite3.Connection, names: list[str], *,
+                       confidence: float = 1.0, failed: bool = False) -> int:
     """Bump `uses`/`last_used` for skills whose body actually shipped this turn.
 
-    Hermes keeps this in a sidecar `.usage.json` "so telemetry stays out of
-    user-authored SKILL.md" (tools/skill_usage.py); FRIDAY already has the
-    columns, so the telemetry lives where the index ordering reads it. Best
-    effort by contract (callers wrap it): telemetry must never fail a user
-    turn. Only ACTIVE skills count — a retired skill gaining uses would be
-    evidence against retiring it, collected after the decision.
+    Also records per-activation confidence/failure telemetry in
+    `skill_activations` so `friday skills` and `friday dream` can surface
+    underperforming skills without mutating user-authored SKILL.md files.
+    Best effort by contract (callers wrap it): telemetry must never fail a
+    user turn. Only ACTIVE skills count.
     """
     from ..util import now_iso
 
     if not names:
         return 0
+    _ensure_activation_table(conn)
     now = now_iso()
+    conf = max(0.0, min(1.0, float(confidence)))
+    fail_int = 1 if failed else 0
     bumped = 0
     for n in sorted(set(names)):
         cur = conn.execute(
@@ -314,8 +328,30 @@ def record_activations(conn: sqlite3.Connection, names: list[str]) -> int:
             "WHERE name = ? AND status = 'active'", (now, n))
         if cur.rowcount and cur.rowcount > 0:
             bumped += cur.rowcount
+            conn.execute(
+                "INSERT INTO skill_activations (skill_name, confidence, failed, recorded_at) "
+                "VALUES (?, ?, ?, ?)", (n, conf, fail_int, now))
     conn.commit()
     return bumped
+
+
+def low_confidence_skills(conn: sqlite3.Connection, *,
+                          threshold: float = 0.7) -> list[dict]:
+    """Return active skills whose average activation confidence is below
+    `threshold` or that have recorded failures."""
+    _ensure_activation_table(conn)
+    rows = conn.execute(
+        "SELECT a.skill_name AS name, COUNT(*) AS activations, "
+        "AVG(a.confidence) AS avg_confidence, SUM(a.failed) AS failures "
+        "FROM skill_activations a "
+        "JOIN skills s ON s.name = a.skill_name "
+        "WHERE s.status = 'active' "
+        "GROUP BY a.skill_name "
+        "HAVING AVG(a.confidence) < ? OR SUM(a.failed) > 0 "
+        "ORDER BY avg_confidence ASC, failures DESC",
+        (float(threshold),),
+    ).fetchall()
+    return [dict(r) for r in rows]
 
 
 def list_drafts() -> list[dict]:
